@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, MessageCircle, Navigation, User, Home, Clock, X, LogOut, Zap } from 'lucide-react';
+import { MapPin, MessageCircle, Navigation, User, Home, Clock, X, LogOut, Zap, Send } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export default function Passageiro() {
@@ -11,6 +11,11 @@ export default function Passageiro() {
   const [endereco, setEndereco] = useState('');
   const [corridaAtual, setCorridaAtual] = useState(null);
   const [historico, setHistorico] = useState([]);
+
+  // ESTADOS DO CHAT
+  const [mensagens, setMensagens] = useState([]);
+  const [novaMsg, setNovaMsg] = useState('');
+  const chatEndRef = useRef(null);
 
   const clienteNome = localStorage.getItem('cliente_nome');
   const clienteTelefone = localStorage.getItem('cliente_telefone');
@@ -28,14 +33,14 @@ export default function Passageiro() {
   }, []);
 
   useEffect(() => {
-    if (!corridaAtual) return;
+    if (!corridaAtual) {
+      setMensagens([]); // Limpa o chat se não houver corrida
+      return;
+    }
     
-    // Fica escutando as mudanças na corrida atual
+    // Escuta mudanças na corrida (Status)
     const corridaSub = supabase.channel('minha_corrida').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'corridas', filter: `id=eq.${corridaAtual.id}` }, async (payload) => {
-        
-        // Se algum taxista aceitou (Chamada Geral ou Direta)
         if (payload.new.status === 'aceita' && payload.new.taxista_id) {
-          // Busca os dados do taxista vencedor para mostrar na tela
           const { data: taxistaData } = await supabase.from('taxistas').select('nome, veiculo, placa').eq('id', payload.new.taxista_id).single();
           setCorridaAtual({ ...payload.new, taxistas: taxistaData });
         } 
@@ -43,19 +48,53 @@ export default function Passageiro() {
           setCorridaAtual(payload.new);
         }
 
-        // Avisos de cancelamento ou conclusão
         if (payload.new.status === 'cancelada') {
           alert('O taxista recusou ou cancelou a chamada.');
           setCorridaAtual(null);
+        } else if (payload.new.status === 'em_corrida') {
+           // O motorista marcou "Passageiro Embarcado", o chat some automaticamente
+           setMensagens([]);
         } else if (payload.new.status === 'concluida') {
           alert('Chegou ao seu destino. Obrigado por usar o Ponto Virtual!');
           setCorridaAtual(null);
           fetchHistorico(); 
         }
       }).subscribe();
+
+    // Busca mensagens antigas (caso recarregue a página)
+    fetchMensagens(corridaAtual.id);
+
+    // Escuta novas MENSAGENS em tempo real
+    const chatSub = supabase.channel(`chat_passageiro_${corridaAtual.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `corrida_id=eq.${corridaAtual.id}` }, (payload) => {
+        setMensagens((prev) => [...prev, payload.new]);
+      }).subscribe();
       
-    return () => supabase.removeChannel(corridaSub);
+    return () => {
+      supabase.removeChannel(corridaSub);
+      supabase.removeChannel(chatSub);
+    };
   }, [corridaAtual]);
+
+  // Rolar o chat sempre para a última mensagem
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [mensagens]);
+
+  async function fetchMensagens(corridaId) {
+    const { data } = await supabase.from('mensagens').select('*').eq('corrida_id', corridaId).order('criado_em', { ascending: true });
+    if (data) setMensagens(data);
+  }
+
+  async function enviarMensagem() {
+    if (!novaMsg.trim()) return;
+    const { error } = await supabase.from('mensagens').insert({
+      corrida_id: corridaAtual.id,
+      remetente: 'cliente',
+      texto: novaMsg
+    });
+    if (!error) setNovaMsg('');
+  }
 
   async function fetchTaxistas() {
     setLoading(true);
@@ -69,28 +108,16 @@ export default function Passageiro() {
     if (data) setHistorico(data);
   }
 
-  // NOVA FUNÇÃO: CHAMADA GERAL (BROADCAST)
   async function chamarTodos() {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
-    const novaCorrida = {
-      passageiro_id: clienteTelefone, 
-      taxista_id: null, // Deixamos VAZIO para apitar para todos
-      origem_endereco: endereco,
-      status: 'pendente'
-    };
+    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: null, origem_endereco: endereco, status: 'pendente' };
     const { data, error } = await supabase.from('corridas').insert(novaCorrida).select().single();
     if (!error && data) setCorridaAtual(data);
   }
 
-  // FUNÇÃO ANTIGA: CHAMADA DIRETA
   async function chamarTaxi(taxistaId) {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
-    const novaCorrida = {
-      passageiro_id: clienteTelefone, 
-      taxista_id: taxistaId, // Vai direto para o ID escolhido
-      origem_endereco: endereco,
-      status: 'pendente'
-    };
+    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: taxistaId, origem_endereco: endereco, status: 'pendente' };
     const { data, error } = await supabase.from('corridas').insert(novaCorrida).select().single();
     if (!error && data) setCorridaAtual(data);
   }
@@ -123,23 +150,67 @@ export default function Passageiro() {
       {activeTab === 'home' && (
         <>
           {corridaAtual ? (
-            <div className="flex flex-col flex-1 items-center justify-center mt-6">
-              <div className={`w-24 h-24 border-4 border-black rounded-full flex items-center justify-center mb-6 shadow-[4px_4px_0px_#000] ${corridaAtual.status === 'pendente' ? 'bg-[#FFE600] animate-pulse' : 'bg-[#A1E636]'}`}>
-                <Navigation size={48} strokeWidth={2.5} />
-              </div>
-              <h2 className="text-2xl font-black uppercase tracking-tight text-center mb-2">
-                {corridaAtual.status === 'pendente' && 'Aguardando Táxi...'}
-                {corridaAtual.status === 'aceita' && 'Taxista a Caminho!'}
-                {corridaAtual.status === 'em_corrida' && 'Em Viagem'}
-              </h2>
+            <div className="flex flex-col flex-1 items-center justify-center mt-2">
+              
+              {/* Oculta a animação grande se o chat estiver ativo para economizar espaço */}
+              {corridaAtual.status === 'pendente' && (
+                <>
+                  <div className="w-24 h-24 border-4 border-black rounded-full flex items-center justify-center mb-4 shadow-[4px_4px_0px_#000] bg-[#FFE600] animate-pulse">
+                    <Navigation size={48} strokeWidth={2.5} />
+                  </div>
+                  <h2 className="text-2xl font-black uppercase tracking-tight text-center mb-6">Aguardando Táxi...</h2>
+                </>
+              )}
 
-              {/* Se o motorista aceitou, mostra os dados dele */}
-              {corridaAtual.taxistas && (
-                <div className="bg-[#A1E636] border-4 border-black rounded-2xl p-4 mt-2 w-full shadow-[4px_4px_0px_#000] text-center mb-4">
-                  <p className="text-[10px] font-black uppercase mb-1">Seu motorista</p>
-                  <p className="font-black text-xl leading-none">{corridaAtual.taxistas.nome}</p>
-                  <p className="font-bold text-sm mt-1">{corridaAtual.taxistas.veiculo}</p>
-                  <p className="text-xs font-black bg-white inline-block px-2 py-1 rounded border-2 border-black mt-2">{corridaAtual.taxistas.placa}</p>
+              {corridaAtual.status === 'em_corrida' && (
+                <div className="w-full bg-[#A1E636] border-4 border-black rounded-2xl p-8 mb-6 shadow-[4px_4px_0px_#000] flex flex-col items-center">
+                  <h2 className="text-3xl font-black uppercase tracking-tight mb-2 text-center">Em Viagem</h2>
+                  <p className="font-bold">Aproveite a sua corrida!</p>
+                </div>
+              )}
+
+              {/* CHAT EFÊMERO E NEGOCIAÇÃO */}
+              {corridaAtual.status === 'aceita' && (
+                <div className="w-full flex flex-col flex-1 bg-white border-4 border-black rounded-2xl mb-4 shadow-[4px_4px_0px_#000] overflow-hidden">
+                  {/* Cabeçalho do Chat */}
+                  <div className="bg-[#A1E636] border-b-4 border-black p-3 flex justify-between items-center">
+                    <div>
+                      <p className="text-[10px] font-black uppercase leading-none mb-1">Taxista a Caminho</p>
+                      <p className="font-black text-lg leading-none">{corridaAtual.taxistas?.nome || 'Motorista'}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-bold">{corridaAtual.taxistas?.veiculo}</p>
+                      <p className="text-[10px] font-black bg-white inline-block px-1 rounded border border-black mt-1">{corridaAtual.taxistas?.placa}</p>
+                    </div>
+                  </div>
+
+                  {/* Área de Mensagens */}
+                  <div className="flex-1 bg-gray-50 p-3 overflow-y-auto flex flex-col gap-2 min-h-[150px] max-h-[250px]">
+                    {mensagens.length === 0 && (
+                      <div className="text-center my-auto text-xs font-bold text-gray-400">Combine o valor da busca no chat abaixo. Mensagens não serão salvas.</div>
+                    )}
+                    {mensagens.map(msg => (
+                      <div key={msg.id} className={`max-w-[85%] p-2 rounded-xl border-2 border-black text-sm font-bold shadow-[2px_2px_0px_#000] ${msg.remetente === 'cliente' ? 'bg-[#4DF0FF] self-end rounded-tr-none' : 'bg-white self-start rounded-tl-none'}`}>
+                        {msg.texto}
+                      </div>
+                    ))}
+                    <div ref={chatEndRef} />
+                  </div>
+
+                  {/* Input do Chat */}
+                  <div className="p-2 border-t-4 border-black flex gap-2 bg-white">
+                    <input 
+                      type="text" 
+                      value={novaMsg} 
+                      onChange={(e) => setNovaMsg(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && enviarMensagem()}
+                      placeholder="Combine o valor aqui..." 
+                      className="flex-1 bg-gray-100 border-2 border-black rounded-xl px-3 font-bold text-sm outline-none focus:border-[#4DF0FF]"
+                    />
+                    <button onClick={enviarMensagem} className="bg-[#FFE600] border-2 border-black p-3 rounded-xl shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all flex items-center justify-center">
+                      <Send size={18} strokeWidth={3} />
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -148,8 +219,8 @@ export default function Passageiro() {
                 <p className="font-bold">{corridaAtual.origem_endereco}</p>
               </div>
 
-              {corridaAtual.status === 'pendente' && (
-                <button onClick={cancelarPedido} className="w-full mt-8 bg-[#FF6B6B] border-4 border-black rounded-2xl py-4 font-black flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">
+              {(corridaAtual.status === 'pendente' || corridaAtual.status === 'aceita') && (
+                <button onClick={cancelarPedido} className="w-full mt-4 bg-[#FF6B6B] border-4 border-black rounded-2xl py-4 font-black flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">
                   <X size={24} strokeWidth={3} /> CANCELAR PEDIDO
                 </button>
               )}
@@ -164,11 +235,7 @@ export default function Passageiro() {
                 </div>
               </div>
 
-              {/* AQUI ESTÁ O BOTÃO GIGANTE DE CHAMADA GERAL */}
-              <button 
-                onClick={chamarTodos} 
-                className="w-full bg-[#FFE600] border-4 border-black rounded-2xl py-5 mb-8 font-black text-lg flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all animate-pulse"
-              >
+              <button onClick={chamarTodos} className="w-full bg-[#FFE600] border-4 border-black rounded-2xl py-5 mb-8 font-black text-lg flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all animate-pulse">
                 <Zap size={24} strokeWidth={3} /> CHAMAR TODOS OS TÁXIS
               </button>
 

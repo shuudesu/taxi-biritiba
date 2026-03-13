@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Power, Car, LogOut, Check, X, MapPin, Flag, Home, DollarSign, User } from 'lucide-react';
+import { Power, Car, LogOut, Check, X, MapPin, Flag, Home, DollarSign, User, Send } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export default function Motorista() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('home');
-  const [motorista, setMotorista] = useState(null);
   const [loading, setLoading] = useState(true);
   
-  // Usamos Refs para que o Realtime consiga ler o estado atual sem bugs de atraso
+  // REFS À PROVA DE FALHAS PARA O REALTIME LER SEMPRE O VALOR ATUALIZADO
+  const [motorista, setMotorista] = useState(null);
+  const motoristaRef = useRef(null);
+  
   const [driverState, setDriverState] = useState('offline');
   const driverStateRef = useRef('offline');
   
@@ -19,7 +21,16 @@ export default function Motorista() {
   const [valorCorrida, setValorCorrida] = useState(''); 
   const [historico, setHistorico] = useState([]);
 
-  // Função segura para atualizar estados
+  // ESTADOS DO CHAT
+  const [mensagens, setMensagens] = useState([]);
+  const [novaMsg, setNovaMsg] = useState('');
+  const chatEndRef = useRef(null);
+
+  // FUNÇÕES SEGURAS DE ATUALIZAÇÃO
+  function setMotoristaSafe(data) {
+    setMotorista(data);
+    motoristaRef.current = data;
+  }
   function setDriverStateSafe(state) {
     setDriverState(state);
     driverStateRef.current = state;
@@ -43,10 +54,49 @@ export default function Motorista() {
     return () => { if (canal) supabase.removeChannel(canal); };
   }, []);
 
+  // CHAT: Escutar mudanças e rolar
+  useEffect(() => {
+    if (!corridaAtual?.id) {
+      setMensagens([]);
+      return;
+    }
+    
+    fetchMensagens(corridaAtual.id);
+
+    const chatSub = supabase.channel(`chat_motorista_${corridaAtual.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `corrida_id=eq.${corridaAtual.id}` }, (payload) => {
+        setMensagens((prev) => [...prev, payload.new]);
+      }).subscribe();
+
+    return () => supabase.removeChannel(chatSub);
+  }, [corridaAtual?.id]); 
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [mensagens]);
+
+  async function fetchMensagens(corridaId) {
+    const { data } = await supabase.from('mensagens').select('*').eq('corrida_id', corridaId).order('criado_em', { ascending: true });
+    if (data) setMensagens(data);
+  }
+
+  async function enviarMensagem(textoDireto = null) {
+    const texto = textoDireto || novaMsg;
+    if (!texto.trim()) return;
+    
+    setNovaMsg(''); 
+    
+    await supabase.from('mensagens').insert({
+      corrida_id: corridaAtualRef.current.id,
+      remetente: 'motorista',
+      texto: texto
+    });
+  }
+
   async function fetchDriverData(id) {
     const { data } = await supabase.from('taxistas').select('*').eq('id', id).single();
     if (data) {
-      setMotorista(data);
+      setMotoristaSafe(data);
       if (!corridaAtualRef.current && data.status === 'livre') setDriverStateSafe('online');
     }
     setLoading(false);
@@ -68,33 +118,24 @@ export default function Motorista() {
   }
 
   function setupRealtimeSubscription(driverId) {
-    // Removemos o filtro de ID específico para ouvirmos TODAS as corridas
     return supabase.channel(`canal_motorista_${driverId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'corridas' }, (payload) => {
-        
-        // 1. UMA CORRIDA NOVA FOI PEDIDA (Geral ou Direta)
         if (payload.eventType === 'INSERT' && payload.new.status === 'pendente') {
           const isParaMim = payload.new.taxista_id === driverId;
           const isGeral = payload.new.taxista_id === null;
           const isEstouOnline = driverStateRef.current === 'online';
 
-          // Se for para mim ou geral, E se eu estiver online, a tela pisca amarelo!
           if ((isParaMim || isGeral) && isEstouOnline) {
             setCorridaAtualSafe(payload.new);
             setDriverStateSafe('tocando');
           }
         }
-        
-        // 2. A CORRIDA ATUAL FOI ATUALIZADA (Alguém aceitou ou o cliente cancelou)
         if (payload.eventType === 'UPDATE' && corridaAtualRef.current && payload.new.id === corridaAtualRef.current.id) {
-          
           if (payload.new.status === 'cancelada') {
             alert("O cliente cancelou o pedido.");
             setCorridaAtualSafe(null);
             updateStatus('livre', 'online');
-          } 
-          // Se for uma chamada geral e outro motorista pegou primeiro
-          else if (payload.new.status === 'aceita' && payload.new.taxista_id !== driverId) {
+          } else if (payload.new.status === 'aceita' && payload.new.taxista_id !== driverId) {
             alert("Esta corrida foi aceita por outro colega. Boa sorte na próxima!");
             setCorridaAtualSafe(null);
             updateStatus('livre', 'online');
@@ -104,10 +145,12 @@ export default function Motorista() {
   }
 
   async function updateStatus(newDbStatus, newUiState) {
-    if (!motorista) return;
-    await supabase.from('taxistas').update({ status: newDbStatus }).eq('id', motorista.id);
+    const motoristaAtual = motoristaRef.current;
+    if (!motoristaAtual) return;
+    
+    await supabase.from('taxistas').update({ status: newDbStatus }).eq('id', motoristaAtual.id);
     setDriverStateSafe(newUiState);
-    setMotorista({ ...motorista, status: newDbStatus });
+    setMotoristaSafe({ ...motoristaAtual, status: newDbStatus });
   }
 
   function handleLogout() {
@@ -115,12 +158,11 @@ export default function Motorista() {
     navigate('/');
   }
 
-  // LÓGICA ANTI-CLONAGEM DE CORRIDA
   async function aceitarCorrida() {
-    // Só atualizamos SE a corrida ainda estiver 'pendente' no banco
+    const motoristaAtual = motoristaRef.current;
     const { data, error } = await supabase
       .from('corridas')
-      .update({ status: 'aceita', taxista_id: motorista.id })
+      .update({ status: 'aceita', taxista_id: motoristaAtual.id })
       .eq('id', corridaAtualRef.current.id)
       .eq('status', 'pendente')
       .select()
@@ -133,18 +175,24 @@ export default function Motorista() {
        return;
     }
 
-    // Se passou, você venceu a corrida!
     setCorridaAtualSafe(data);
     updateStatus('em_corrida', 'buscando');
   }
 
   async function recusarCorrida() {
-    // Se era uma chamada só pra mim, cancela. Se era geral, só ignora localmente.
-    if (corridaAtualRef.current.taxista_id === motorista.id) {
+    const motoristaAtual = motoristaRef.current;
+    if (corridaAtualRef.current.taxista_id === motoristaAtual.id) {
       await supabase.from('corridas').update({ status: 'cancelada' }).eq('id', corridaAtualRef.current.id);
     }
     setCorridaAtualSafe(null);
     updateStatus('livre', 'online');
+  }
+
+  async function confirmarEmbarque() {
+    await supabase.from('corridas').update({ status: 'em_corrida' }).eq('id', corridaAtualRef.current.id);
+    await supabase.from('mensagens').delete().eq('corrida_id', corridaAtualRef.current.id);
+    setMensagens([]);
+    setDriverStateSafe('em_corrida');
   }
 
   async function finalizarCorridaReal() {
@@ -152,11 +200,15 @@ export default function Motorista() {
     await supabase.from('corridas').update({ status: 'concluida', valor: parseFloat(valorCorrida) }).eq('id', corridaAtualRef.current.id);
     setCorridaAtualSafe(null);
     setValorCorrida(''); 
+    
+    // Atualiza o motorista para livre ao finalizar a corrida
     updateStatus('livre', 'online');
-    fetchHistorico(motorista.id); 
+    
+    if (motoristaRef.current) {
+      fetchHistorico(motoristaRef.current.id); 
+    }
   }
 
-  // --- MAPAS ---
   function abrirWaze() {
     if (!corridaAtualRef.current?.origem_endereco) return;
     const enderecoFormatado = encodeURIComponent(`${corridaAtualRef.current.origem_endereco}, Biritiba Mirim`);
@@ -231,20 +283,49 @@ export default function Motorista() {
 
           {driverState === 'buscando' && (
             <div className="flex flex-col flex-1">
-              <div className="bg-white border-4 border-black rounded-3xl p-5 shadow-[4px_4px_0px_#000] mb-6">
-                <h3 className="text-[10px] font-black uppercase text-gray-500 mb-4">A Caminho do Passageiro</h3>
-                <div className="flex items-start gap-3 bg-gray-100 p-3 rounded-xl border-2 border-black mb-6">
+              <div className="bg-white border-4 border-black rounded-3xl p-5 shadow-[4px_4px_0px_#000] mb-4">
+                <h3 className="text-[10px] font-black uppercase text-gray-500 mb-2">A Caminho do Passageiro</h3>
+                <div className="flex items-start gap-3 bg-gray-100 p-2 rounded-xl border-2 border-black mb-4">
                   <MapPin size={20} strokeWidth={2.5} className="mt-0.5 shrink-0" />
-                  <p className="text-sm font-bold">{corridaAtualRef.current?.origem_endereco}</p>
+                  <p className="text-sm font-bold leading-tight">{corridaAtualRef.current?.origem_endereco}</p>
                 </div>
-                
-                {/* BOTÕES DE GPS LADO A LADO */}
                 <div className="flex gap-3">
-                  <button onClick={abrirWaze} className="flex-1 bg-[#4DF0FF] border-2 border-black rounded-xl py-3 font-black text-xs shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all">WAZE</button>
-                  <button onClick={abrirGoogleMaps} className="flex-1 bg-[#A1E636] border-2 border-black rounded-xl py-3 font-black text-xs shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all">MAPS</button>
+                  <button onClick={abrirWaze} className="flex-1 bg-[#4DF0FF] border-2 border-black rounded-xl py-2 font-black text-xs shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all">WAZE</button>
+                  <button onClick={abrirGoogleMaps} className="flex-1 bg-[#A1E636] border-2 border-black rounded-xl py-2 font-black text-xs shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all">MAPS</button>
                 </div>
               </div>
-              <button onClick={() => setDriverStateSafe('em_corrida')} className="w-full mt-auto bg-[#FFE600] border-4 border-black rounded-2xl py-5 font-black text-lg shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">PASSAGEIRO EMBARCADO</button>
+
+              {/* CHAT EFÊMERO MOTORISTA */}
+              <div className="w-full flex flex-col flex-1 bg-white border-4 border-black rounded-2xl mb-4 shadow-[4px_4px_0px_#000] overflow-hidden min-h-[220px]">
+                <div className="bg-[#BFFCC6] border-b-4 border-black p-2 flex justify-between items-center">
+                  <span className="text-xs font-black uppercase">Negociar Busca</span>
+                  <span className="text-[10px] bg-white border-2 border-black px-2 py-0.5 rounded font-black">Efêmero</span>
+                </div>
+
+                <div className="flex-1 bg-gray-50 p-2 overflow-y-auto flex flex-col gap-2 max-h-[150px]">
+                  {mensagens.map(msg => (
+                    <div key={msg.id} className={`max-w-[85%] p-2 rounded-xl border-2 border-black text-sm font-bold shadow-[2px_2px_0px_#000] ${msg.remetente === 'motorista' ? 'bg-[#FFE600] self-end rounded-tr-none' : 'bg-white self-start rounded-tl-none'}`}>
+                      {msg.texto}
+                    </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </div>
+
+                <div className="flex gap-2 px-2 py-1 bg-gray-200 overflow-x-auto border-t-2 border-black">
+                  <button onClick={() => enviarMensagem("Taxa de busca: R$ 5,00. Confirma?")} className="shrink-0 bg-white border-2 border-black rounded-md px-2 py-1 text-[10px] font-black shadow-[2px_2px_0px_#000] active:shadow-none active:translate-y-[2px]">R$ 5,00</button>
+                  <button onClick={() => enviarMensagem("Taxa de busca: R$ 10,00. Confirma?")} className="shrink-0 bg-white border-2 border-black rounded-md px-2 py-1 text-[10px] font-black shadow-[2px_2px_0px_#000] active:shadow-none active:translate-y-[2px]">R$ 10,00</button>
+                  <button onClick={() => enviarMensagem("Estou chegando!")} className="shrink-0 bg-white border-2 border-black rounded-md px-2 py-1 text-[10px] font-black shadow-[2px_2px_0px_#000] active:shadow-none active:translate-y-[2px]">Estou chegando</button>
+                </div>
+
+                <div className="p-2 border-t-2 border-black flex gap-2 bg-white">
+                  <input type="text" value={novaMsg} onChange={(e) => setNovaMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && enviarMensagem()} placeholder="Ou digite..." className="flex-1 bg-gray-100 border-2 border-black rounded-lg px-2 font-bold text-xs outline-none focus:border-[#4DF0FF]"/>
+                  <button onClick={() => enviarMensagem()} className="bg-[#FFE600] border-2 border-black p-2 rounded-lg shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none flex items-center justify-center">
+                    <Send size={16} strokeWidth={3} />
+                  </button>
+                </div>
+              </div>
+
+              <button onClick={confirmarEmbarque} className="w-full bg-[#FFE600] border-4 border-black rounded-2xl py-4 font-black text-lg shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">PASSAGEIRO EMBARCADO</button>
             </div>
           )}
 
