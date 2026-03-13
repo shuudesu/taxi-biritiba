@@ -5,7 +5,6 @@ import { supabase } from '../lib/supabase';
 
 export default function LoginCliente() {
   const navigate = useNavigate();
-  // Este state controla se a ecrã é de Login ou de Cadastro
   const [isLogin, setIsLogin] = useState(true); 
   
   const [nome, setNome] = useState('');
@@ -20,7 +19,6 @@ export default function LoginCliente() {
     setLoading(true);
 
     if (isLogin) {
-      // --- LÓGICA DE LOGIN ---
       const { data, error } = await supabase
         .from('clientes')
         .select('*')
@@ -34,13 +32,11 @@ export default function LoginCliente() {
         return;
       }
 
-      // Salva a sessão e entra
       localStorage.setItem('cliente_nome', data.nome);
       localStorage.setItem('cliente_telefone', data.telefone);
       navigate('/cliente');
 
     } else {
-      // --- LÓGICA DE CADASTRO ---
       const { data, error } = await supabase
         .from('clientes')
         .insert([{ nome, telefone, senha }])
@@ -48,7 +44,7 @@ export default function LoginCliente() {
         .single();
 
       if (error) {
-        if (error.code === '23505') { // Erro do banco de dados para "Duplicado"
+        if (error.code === '23505') { 
             alert('Este telefone já está cadastrado! Vá para a tela de Login.');
         } else {
             alert('Erro ao criar conta. Tente novamente.');
@@ -57,7 +53,6 @@ export default function LoginCliente() {
         return;
       }
 
-      // Salva a sessão e entra
       localStorage.setItem('cliente_nome', data.nome);
       localStorage.setItem('cliente_telefone', data.telefone);
       alert('Conta criada com sucesso!');
@@ -66,8 +61,8 @@ export default function LoginCliente() {
   }
 
   return (
-    <div className="flex flex-col h-full flex-1">
-      <div className="flex items-center gap-4 mb-6 border-b-4 border-black pb-4 mt-2">
+    <div className="flex flex-col h-full flex-1 overflow-y-auto pb-6">
+      <div className="flex items-center gap-4 mb-6 border-b-4 border-black pb-4 mt-2 shrink-0">
         <button onClick={() => navigate('/')} className="bg-white p-2 rounded-xl border-4 border-black shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all">
           <ArrowLeft size={24} strokeWidth={3} />
         </button>
@@ -77,12 +72,11 @@ export default function LoginCliente() {
       </div>
 
       <div className="flex flex-col flex-1">
-        <div className="w-20 h-20 bg-[#BFFCC6] border-4 border-black rounded-full flex justify-center items-center mb-6 shadow-[4px_4px_0px_#000] mx-auto transition-all">
+        <div className="w-20 h-20 bg-[#BFFCC6] border-4 border-black rounded-full flex justify-center items-center mb-6 shadow-[4px_4px_0px_#000] mx-auto transition-all shrink-0">
           {isLogin ? <LogIn size={36} strokeWidth={2.5} /> : <UserPlus size={36} strokeWidth={2.5} />}
         </div>
         
-        {/* Toggle Login / Cadastro */}
-        <div className="flex bg-white border-4 border-black rounded-xl p-1 mb-6 shadow-[4px_4px_0px_#000]">
+        <div className="flex bg-white border-4 border-black rounded-xl p-1 mb-6 shadow-[4px_4px_0px_#000] shrink-0">
           <button 
             onClick={() => setIsLogin(true)}
             className={`flex-1 py-2 font-black uppercase text-xs rounded-lg transition-all ${isLogin ? 'bg-[#FFE600] border-2 border-black' : 'text-gray-500'}`}
@@ -97,9 +91,8 @@ export default function LoginCliente() {
           </button>
         </div>
 
-        {/* Campo de Nome (Aparece apenas no Cadastro) */}
         {!isLogin && (
-          <div className="mb-4">
+          <div className="mb-4 shrink-0">
             <label className="font-black uppercase text-xs mb-1 block">Como gostaria de ser chamado?</label>
             <div className="relative">
               <input 
@@ -114,8 +107,7 @@ export default function LoginCliente() {
           </div>
         )}
 
-        {/* Campos Fixos: Telefone e Senha */}
-        <div className="mb-4">
+        <div className="mb-4 shrink-0">
           <label className="font-black uppercase text-xs mb-1 block">Seu WhatsApp</label>
           <input 
             type="number" 
@@ -126,7 +118,7 @@ export default function LoginCliente() {
           />
         </div>
 
-        <div className="mb-8">
+        <div className="mb-4 shrink-0">
           <label className="font-black uppercase text-xs mb-1 block">Sua Senha</label>
           <div className="relative">
             <input 
@@ -143,7 +135,7 @@ export default function LoginCliente() {
         <button 
           onClick={handleSubmit}
           disabled={loading}
-          className="w-full mt-auto mb-6 bg-[#FFE600] border-4 border-black rounded-2xl py-5 font-black text-xl flex justify-center items-center gap-3 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all disabled:opacity-50"
+          className="w-full mt-8 mb-6 bg-[#FFE600] border-4 border-black rounded-2xl py-5 font-black text-xl flex justify-center items-center gap-3 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all disabled:opacity-50 shrink-0"
         >
           {loading ? 'PROCESSANDO...' : (isLogin ? 'ENTRAR' : 'FINALIZAR CADASTRO')}
           {!loading && <ArrowRight size={24} strokeWidth={3} />}

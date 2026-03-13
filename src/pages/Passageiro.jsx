@@ -12,7 +12,6 @@ export default function Passageiro() {
   const [corridaAtual, setCorridaAtual] = useState(null);
   const [historico, setHistorico] = useState([]);
 
-  // Dados do Cliente
   const clienteNome = localStorage.getItem('cliente_nome');
   const clienteTelefone = localStorage.getItem('cliente_telefone');
 
@@ -38,7 +37,7 @@ export default function Passageiro() {
         } else if (payload.new.status === 'concluida') {
           alert('Chegou ao seu destino. Obrigado por usar o Ponto Virtual!');
           setCorridaAtual(null);
-          fetchHistorico(); // Atualiza histórico
+          fetchHistorico(); 
         }
       }).subscribe();
     return () => supabase.removeChannel(corridaSub);
@@ -59,7 +58,7 @@ export default function Passageiro() {
   async function chamarTaxi(taxistaId) {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
     const novaCorrida = {
-      passageiro_id: clienteTelefone, // Usamos o telefone como ID único
+      passageiro_id: clienteTelefone, 
       taxista_id: taxistaId,
       origem_endereco: endereco,
       status: 'pendente'
@@ -192,8 +191,8 @@ export default function Passageiro() {
         </div>
       )}
 
-      {/* Menu Inferior */}
-      <div className="fixed bottom-6 w-[90%] max-w-[380px] bg-white border-4 border-black rounded-2xl flex justify-between px-6 py-3 shadow-[4px_4px_0px_#000] z-40">
+      {/* Menu Inferior Centralizado */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-[380px] bg-white border-4 border-black rounded-2xl flex justify-between px-6 py-3 shadow-[4px_4px_0px_#000] z-40">
         <button onClick={() => setActiveTab('home')} className="flex flex-col items-center gap-1 relative group w-16">
           {activeTab === 'home' && <div className="absolute -inset-1 bg-[#FFE600] rounded-xl -z-10 border-2 border-black"></div>}
           <Home size={24} strokeWidth={2} />

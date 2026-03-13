@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Power, Car, LogOut, Check, X, MapPin, Flag, Home, Clock, User, DollarSign } from 'lucide-react';
+import { Power, Car, LogOut, Check, X, MapPin, Flag, Home, DollarSign, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export default function Motorista() {
@@ -11,7 +11,7 @@ export default function Motorista() {
   
   const [driverState, setDriverState] = useState('offline');
   const [corridaAtual, setCorridaAtual] = useState(null);
-  const [valorCorrida, setValorCorrida] = useState(''); // Estado para o input de valor
+  const [valorCorrida, setValorCorrida] = useState(''); 
   const [historico, setHistorico] = useState([]);
 
   useEffect(() => {
@@ -86,14 +86,13 @@ export default function Motorista() {
     updateStatus('livre', 'online');
   }
 
-  // Finalização Real
   async function finalizarCorridaReal() {
     if (!valorCorrida) return alert("Digite o valor da corrida!");
     await supabase.from('corridas').update({ status: 'concluida', valor: parseFloat(valorCorrida) }).eq('id', corridaAtual.id);
     setCorridaAtual(null);
-    setValorCorrida(''); // Limpa o input
+    setValorCorrida(''); 
     updateStatus('livre', 'online');
-    fetchHistorico(motorista.id); // Atualiza aba de ganhos
+    fetchHistorico(motorista.id); 
   }
 
   function abrirWaze() {
@@ -242,8 +241,8 @@ export default function Motorista() {
         </div>
       )}
 
-      {/* Menu Inferior */}
-      <div className="fixed bottom-6 w-[90%] max-w-[380px] bg-white border-4 border-black rounded-2xl flex justify-between px-6 py-3 shadow-[4px_4px_0px_#000] z-40">
+      {/* Menu Inferior Centralizado */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-[380px] bg-white border-4 border-black rounded-2xl flex justify-between px-6 py-3 shadow-[4px_4px_0px_#000] z-40">
         <button onClick={() => setActiveTab('home')} className="flex flex-col items-center gap-1 relative group w-16">
           {activeTab === 'home' && <div className="absolute -inset-1 bg-[#FFE600] rounded-xl -z-10 border-2 border-black"></div>}
           <Home size={24} strokeWidth={2} />
