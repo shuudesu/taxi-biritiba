@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Power, Car, LogOut, Check, X, MapPin, Flag, Home, DollarSign, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -9,10 +9,25 @@ export default function Motorista() {
   const [motorista, setMotorista] = useState(null);
   const [loading, setLoading] = useState(true);
   
+  // Usamos Refs para que o Realtime consiga ler o estado atual sem bugs de atraso
   const [driverState, setDriverState] = useState('offline');
+  const driverStateRef = useRef('offline');
+  
   const [corridaAtual, setCorridaAtual] = useState(null);
+  const corridaAtualRef = useRef(null);
+  
   const [valorCorrida, setValorCorrida] = useState(''); 
   const [historico, setHistorico] = useState([]);
+
+  // Função segura para atualizar estados
+  function setDriverStateSafe(state) {
+    setDriverState(state);
+    driverStateRef.current = state;
+  }
+  function setCorridaAtualSafe(corrida) {
+    setCorridaAtual(corrida);
+    corridaAtualRef.current = corrida;
+  }
 
   useEffect(() => {
     const driverId = localStorage.getItem('driver_id');
@@ -32,7 +47,7 @@ export default function Motorista() {
     const { data } = await supabase.from('taxistas').select('*').eq('id', id).single();
     if (data) {
       setMotorista(data);
-      if (!corridaAtual && data.status === 'livre') setDriverState('online');
+      if (!corridaAtualRef.current && data.status === 'livre') setDriverStateSafe('online');
     }
     setLoading(false);
   }
@@ -45,20 +60,45 @@ export default function Motorista() {
   async function fetchCorridaAtiva(driverId) {
     const { data } = await supabase.from('corridas').select('*').eq('taxista_id', driverId).in('status', ['pendente', 'aceita', 'em_corrida']).maybeSingle();
     if (data) {
-      setCorridaAtual(data);
-      if (data.status === 'pendente') setDriverState('tocando');
-      if (data.status === 'aceita') setDriverState('buscando');
-      if (data.status === 'em_corrida') setDriverState('em_corrida');
+      setCorridaAtualSafe(data);
+      if (data.status === 'pendente') setDriverStateSafe('tocando');
+      if (data.status === 'aceita') setDriverStateSafe('buscando');
+      if (data.status === 'em_corrida') setDriverStateSafe('em_corrida');
     }
   }
 
   function setupRealtimeSubscription(driverId) {
-    return supabase.channel(`canal_motorista_${driverId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'corridas', filter: `taxista_id=eq.${driverId}` }, (payload) => {
-        if (payload.eventType === 'INSERT') { setCorridaAtual(payload.new); setDriverState('tocando'); }
-        if (payload.eventType === 'UPDATE' && payload.new.status === 'cancelada') {
-          alert("O cliente cancelou o pedido.");
-          setCorridaAtual(null);
-          updateStatus('livre', 'online');
+    // Removemos o filtro de ID específico para ouvirmos TODAS as corridas
+    return supabase.channel(`canal_motorista_${driverId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'corridas' }, (payload) => {
+        
+        // 1. UMA CORRIDA NOVA FOI PEDIDA (Geral ou Direta)
+        if (payload.eventType === 'INSERT' && payload.new.status === 'pendente') {
+          const isParaMim = payload.new.taxista_id === driverId;
+          const isGeral = payload.new.taxista_id === null;
+          const isEstouOnline = driverStateRef.current === 'online';
+
+          // Se for para mim ou geral, E se eu estiver online, a tela pisca amarelo!
+          if ((isParaMim || isGeral) && isEstouOnline) {
+            setCorridaAtualSafe(payload.new);
+            setDriverStateSafe('tocando');
+          }
+        }
+        
+        // 2. A CORRIDA ATUAL FOI ATUALIZADA (Alguém aceitou ou o cliente cancelou)
+        if (payload.eventType === 'UPDATE' && corridaAtualRef.current && payload.new.id === corridaAtualRef.current.id) {
+          
+          if (payload.new.status === 'cancelada') {
+            alert("O cliente cancelou o pedido.");
+            setCorridaAtualSafe(null);
+            updateStatus('livre', 'online');
+          } 
+          // Se for uma chamada geral e outro motorista pegou primeiro
+          else if (payload.new.status === 'aceita' && payload.new.taxista_id !== driverId) {
+            alert("Esta corrida foi aceita por outro colega. Boa sorte na próxima!");
+            setCorridaAtualSafe(null);
+            updateStatus('livre', 'online');
+          }
         }
       }).subscribe();
   }
@@ -66,7 +106,7 @@ export default function Motorista() {
   async function updateStatus(newDbStatus, newUiState) {
     if (!motorista) return;
     await supabase.from('taxistas').update({ status: newDbStatus }).eq('id', motorista.id);
-    setDriverState(newUiState);
+    setDriverStateSafe(newUiState);
     setMotorista({ ...motorista, status: newDbStatus });
   }
 
@@ -75,30 +115,58 @@ export default function Motorista() {
     navigate('/');
   }
 
+  // LÓGICA ANTI-CLONAGEM DE CORRIDA
   async function aceitarCorrida() {
-    await supabase.from('corridas').update({ status: 'aceita' }).eq('id', corridaAtual.id);
+    // Só atualizamos SE a corrida ainda estiver 'pendente' no banco
+    const { data, error } = await supabase
+      .from('corridas')
+      .update({ status: 'aceita', taxista_id: motorista.id })
+      .eq('id', corridaAtualRef.current.id)
+      .eq('status', 'pendente')
+      .select()
+      .single();
+
+    if (error || !data) {
+       alert("Ops! Esta corrida já foi pega por outro motorista ou cancelada.");
+       setCorridaAtualSafe(null);
+       updateStatus('livre', 'online');
+       return;
+    }
+
+    // Se passou, você venceu a corrida!
+    setCorridaAtualSafe(data);
     updateStatus('em_corrida', 'buscando');
   }
 
   async function recusarCorrida() {
-    await supabase.from('corridas').update({ status: 'cancelada' }).eq('id', corridaAtual.id);
-    setCorridaAtual(null);
+    // Se era uma chamada só pra mim, cancela. Se era geral, só ignora localmente.
+    if (corridaAtualRef.current.taxista_id === motorista.id) {
+      await supabase.from('corridas').update({ status: 'cancelada' }).eq('id', corridaAtualRef.current.id);
+    }
+    setCorridaAtualSafe(null);
     updateStatus('livre', 'online');
   }
 
   async function finalizarCorridaReal() {
     if (!valorCorrida) return alert("Digite o valor da corrida!");
-    await supabase.from('corridas').update({ status: 'concluida', valor: parseFloat(valorCorrida) }).eq('id', corridaAtual.id);
-    setCorridaAtual(null);
+    await supabase.from('corridas').update({ status: 'concluida', valor: parseFloat(valorCorrida) }).eq('id', corridaAtualRef.current.id);
+    setCorridaAtualSafe(null);
     setValorCorrida(''); 
     updateStatus('livre', 'online');
     fetchHistorico(motorista.id); 
   }
 
+  // --- MAPAS ---
   function abrirWaze() {
-    if (!corridaAtual?.origem_endereco) return;
-    const enderecoFormatado = encodeURIComponent(`${corridaAtual.origem_endereco}, Biritiba Mirim`);
+    if (!corridaAtualRef.current?.origem_endereco) return;
+    const enderecoFormatado = encodeURIComponent(`${corridaAtualRef.current.origem_endereco}, Biritiba Mirim`);
     window.open(`https://waze.com/ul?q=${enderecoFormatado}`, '_blank');
+  }
+
+  function abrirGoogleMaps() {
+    if (!corridaAtualRef.current?.origem_endereco) return;
+    const enderecoFormatado = encodeURIComponent(`${corridaAtualRef.current.origem_endereco}, Biritiba Mirim`);
+    window.open(`https://www.google.com/maps/search/?api=1&query=${enderecoFormatado}`, '_blank');
   }
 
   const ganhosHoje = historico.reduce((acc, curr) => acc + Number(curr.valor || 0), 0).toFixed(2);
@@ -148,9 +216,11 @@ export default function Motorista() {
           {driverState === 'tocando' && (
             <div className="flex flex-col items-center justify-center flex-1">
               <div className="w-full bg-[#FFE600] border-4 border-black rounded-3xl p-6 shadow-[8px_8px_0px_#000] animate-bounce">
-                <div className="bg-black text-yellow-300 text-xs font-black uppercase px-3 py-1 inline-block rounded-full mb-4">NOVA CORRIDA!</div>
+                <div className="bg-black text-yellow-300 text-xs font-black uppercase px-3 py-1 inline-block rounded-full mb-4">
+                  {corridaAtualRef.current?.taxista_id === null ? 'CHAMADA GERAL!' : 'NOVA CORRIDA!'}
+                </div>
                 <h2 className="text-2xl font-black uppercase tracking-tight mb-2">Ponto de Origem:</h2>
-                <p className="text-lg font-bold mb-6">{corridaAtual?.origem_endereco}</p>
+                <p className="text-lg font-bold mb-6">{corridaAtualRef.current?.origem_endereco}</p>
                 <div className="flex gap-3">
                   <button onClick={recusarCorrida} className="flex-1 bg-[#FF6B6B] border-4 border-black rounded-2xl py-4 flex justify-center items-center shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all"><X size={32} strokeWidth={3} /></button>
                   <button onClick={aceitarCorrida} className="flex-[2] bg-[#A1E636] border-4 border-black rounded-2xl py-4 flex justify-center items-center gap-2 font-black text-xl shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all"><Check size={28} strokeWidth={3} /> ACEITAR</button>
@@ -165,11 +235,16 @@ export default function Motorista() {
                 <h3 className="text-[10px] font-black uppercase text-gray-500 mb-4">A Caminho do Passageiro</h3>
                 <div className="flex items-start gap-3 bg-gray-100 p-3 rounded-xl border-2 border-black mb-6">
                   <MapPin size={20} strokeWidth={2.5} className="mt-0.5 shrink-0" />
-                  <p className="text-sm font-bold">{corridaAtual?.origem_endereco}</p>
+                  <p className="text-sm font-bold">{corridaAtualRef.current?.origem_endereco}</p>
                 </div>
-                <button onClick={abrirWaze} className="w-full bg-[#4DF0FF] border-2 border-black rounded-xl py-3 font-black text-sm shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all">ABRIR NO WAZE</button>
+                
+                {/* BOTÕES DE GPS LADO A LADO */}
+                <div className="flex gap-3">
+                  <button onClick={abrirWaze} className="flex-1 bg-[#4DF0FF] border-2 border-black rounded-xl py-3 font-black text-xs shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all">WAZE</button>
+                  <button onClick={abrirGoogleMaps} className="flex-1 bg-[#A1E636] border-2 border-black rounded-xl py-3 font-black text-xs shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all">MAPS</button>
+                </div>
               </div>
-              <button onClick={() => setDriverState('em_corrida')} className="w-full mt-auto bg-[#FFE600] border-4 border-black rounded-2xl py-5 font-black text-lg shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">PASSAGEIRO EMBARCADO</button>
+              <button onClick={() => setDriverStateSafe('em_corrida')} className="w-full mt-auto bg-[#FFE600] border-4 border-black rounded-2xl py-5 font-black text-lg shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">PASSAGEIRO EMBARCADO</button>
             </div>
           )}
 
@@ -180,7 +255,7 @@ export default function Motorista() {
                 <h2 className="text-3xl font-black uppercase tracking-tight mb-2">Em Corrida</h2>
                 <p className="text-sm font-bold text-gray-800">Siga o trajeto e utilize o seu taxímetro.</p>
               </div>
-              <button onClick={() => setDriverState('finalizando')} className="w-full bg-black text-white border-4 border-black rounded-2xl py-5 font-black text-lg shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">DESTINO CONCLUÍDO</button>
+              <button onClick={() => setDriverStateSafe('finalizando')} className="w-full bg-black text-white border-4 border-black rounded-2xl py-5 font-black text-lg shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">DESTINO CONCLUÍDO</button>
             </div>
           )}
 
@@ -241,7 +316,6 @@ export default function Motorista() {
         </div>
       )}
 
-      {/* Menu Inferior Centralizado */}
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-[380px] bg-white border-4 border-black rounded-2xl flex justify-between px-6 py-3 shadow-[4px_4px_0px_#000] z-40">
         <button onClick={() => setActiveTab('home')} className="flex flex-col items-center gap-1 relative group w-16">
           {activeTab === 'home' && <div className="absolute -inset-1 bg-[#FFE600] rounded-xl -z-10 border-2 border-black"></div>}

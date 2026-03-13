@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, MessageCircle, Navigation, User, Home, Clock, ArrowLeft, X, LogOut } from 'lucide-react';
+import { MapPin, MessageCircle, Navigation, User, Home, Clock, ArrowLeft, X, LogOut, Zap } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export default function Passageiro() {
@@ -29,8 +29,21 @@ export default function Passageiro() {
 
   useEffect(() => {
     if (!corridaAtual) return;
-    const corridaSub = supabase.channel('minha_corrida').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'corridas', filter: `id=eq.${corridaAtual.id}` }, (payload) => {
-        setCorridaAtual(payload.new);
+    
+    // Fica escutando as mudanças na corrida atual
+    const corridaSub = supabase.channel('minha_corrida').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'corridas', filter: `id=eq.${corridaAtual.id}` }, async (payload) => {
+        
+        // Se algum taxista aceitou (Chamada Geral ou Direta)
+        if (payload.new.status === 'aceita' && payload.new.taxista_id) {
+          // Busca os dados do taxista vencedor para mostrar na tela
+          const { data: taxistaData } = await supabase.from('taxistas').select('nome, veiculo, placa').eq('id', payload.new.taxista_id).single();
+          setCorridaAtual({ ...payload.new, taxistas: taxistaData });
+        } 
+        else {
+          setCorridaAtual(payload.new);
+        }
+
+        // Avisos de cancelamento ou conclusão
         if (payload.new.status === 'cancelada') {
           alert('O taxista recusou ou cancelou a chamada.');
           setCorridaAtual(null);
@@ -40,6 +53,7 @@ export default function Passageiro() {
           fetchHistorico(); 
         }
       }).subscribe();
+      
     return () => supabase.removeChannel(corridaSub);
   }, [corridaAtual]);
 
@@ -55,11 +69,25 @@ export default function Passageiro() {
     if (data) setHistorico(data);
   }
 
+  // NOVA FUNÇÃO: CHAMADA GERAL (BROADCAST)
+  async function chamarTodos() {
+    if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
+    const novaCorrida = {
+      passageiro_id: clienteTelefone, 
+      taxista_id: null, // Deixamos VAZIO para apitar para todos
+      origem_endereco: endereco,
+      status: 'pendente'
+    };
+    const { data, error } = await supabase.from('corridas').insert(novaCorrida).select().single();
+    if (!error && data) setCorridaAtual(data);
+  }
+
+  // FUNÇÃO ANTIGA: CHAMADA DIRETA
   async function chamarTaxi(taxistaId) {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
     const novaCorrida = {
       passageiro_id: clienteTelefone, 
-      taxista_id: taxistaId,
+      taxista_id: taxistaId, // Vai direto para o ID escolhido
       origem_endereco: endereco,
       status: 'pendente'
     };
@@ -95,19 +123,31 @@ export default function Passageiro() {
       {activeTab === 'home' && (
         <>
           {corridaAtual ? (
-            <div className="flex flex-col flex-1 items-center justify-center mt-10">
+            <div className="flex flex-col flex-1 items-center justify-center mt-6">
               <div className={`w-24 h-24 border-4 border-black rounded-full flex items-center justify-center mb-6 shadow-[4px_4px_0px_#000] ${corridaAtual.status === 'pendente' ? 'bg-[#FFE600] animate-pulse' : 'bg-[#A1E636]'}`}>
                 <Navigation size={48} strokeWidth={2.5} />
               </div>
               <h2 className="text-2xl font-black uppercase tracking-tight text-center mb-2">
-                {corridaAtual.status === 'pendente' && 'Aguardando Taxista...'}
+                {corridaAtual.status === 'pendente' && 'Aguardando Táxi...'}
                 {corridaAtual.status === 'aceita' && 'Taxista a Caminho!'}
                 {corridaAtual.status === 'em_corrida' && 'Em Viagem'}
               </h2>
-              <div className="bg-white border-4 border-black rounded-2xl p-4 mt-6 w-full shadow-[4px_4px_0px_#000]">
+
+              {/* Se o motorista aceitou, mostra os dados dele */}
+              {corridaAtual.taxistas && (
+                <div className="bg-[#A1E636] border-4 border-black rounded-2xl p-4 mt-2 w-full shadow-[4px_4px_0px_#000] text-center mb-4">
+                  <p className="text-[10px] font-black uppercase mb-1">Seu motorista</p>
+                  <p className="font-black text-xl leading-none">{corridaAtual.taxistas.nome}</p>
+                  <p className="font-bold text-sm mt-1">{corridaAtual.taxistas.veiculo}</p>
+                  <p className="text-xs font-black bg-white inline-block px-2 py-1 rounded border-2 border-black mt-2">{corridaAtual.taxistas.placa}</p>
+                </div>
+              )}
+
+              <div className="bg-white border-4 border-black rounded-2xl p-4 w-full shadow-[4px_4px_0px_#000]">
                 <p className="text-[10px] font-black uppercase text-gray-500 mb-1">Ponto de Encontro</p>
                 <p className="font-bold">{corridaAtual.origem_endereco}</p>
               </div>
+
               {corridaAtual.status === 'pendente' && (
                 <button onClick={cancelarPedido} className="w-full mt-8 bg-[#FF6B6B] border-4 border-black rounded-2xl py-4 font-black flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">
                   <X size={24} strokeWidth={3} /> CANCELAR PEDIDO
@@ -123,7 +163,17 @@ export default function Passageiro() {
                   <MapPin size={20} strokeWidth={3} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                 </div>
               </div>
-              <h2 className="text-2xl font-black mb-4 uppercase tracking-tight shrink-0">Taxistas no Ponto</h2>
+
+              {/* NOVO BOTÃO DE CHAMADA GERAL */}
+              <button 
+                onClick={chamarTodos} 
+                className="w-full bg-[#FFE600] border-4 border-black rounded-2xl py-5 mb-8 font-black text-lg flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all animate-pulse"
+              >
+                <Zap size={24} strokeWidth={3} /> CHAMAR TODOS OS TÁXIS
+              </button>
+
+              <h2 className="text-lg font-black mb-4 uppercase tracking-tight shrink-0">Ou escolha no ponto:</h2>
+              
               {loading ? (
                 <div className="text-center font-bold text-gray-600 mt-10 animate-pulse">Buscando taxistas...</div>
               ) : taxistas.length === 0 ? (
@@ -166,7 +216,7 @@ export default function Passageiro() {
               {historico.map(corrida => (
                 <div key={corrida.id} className="bg-white border-4 border-black rounded-xl p-4 shadow-[4px_4px_0px_#000]">
                   <div className="flex justify-between mb-2">
-                    <span className="font-black uppercase text-sm">Táxi: {corrida.taxistas?.nome}</span>
+                    <span className="font-black uppercase text-sm">Táxi: {corrida.taxistas?.nome || 'Geral'}</span>
                     <span className="font-bold text-green-600">{corrida.status === 'concluida' ? (corrida.valor ? `R$ ${corrida.valor}` : 'Concluída') : corrida.status}</span>
                   </div>
                   <p className="text-xs font-bold text-gray-600">{corrida.origem_endereco}</p>
@@ -191,7 +241,6 @@ export default function Passageiro() {
         </div>
       )}
 
-      {/* Menu Inferior Centralizado */}
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-[380px] bg-white border-4 border-black rounded-2xl flex justify-between px-6 py-3 shadow-[4px_4px_0px_#000] z-40">
         <button onClick={() => setActiveTab('home')} className="flex flex-col items-center gap-1 relative group w-16">
           {activeTab === 'home' && <div className="absolute -inset-1 bg-[#FFE600] rounded-xl -z-10 border-2 border-black"></div>}
