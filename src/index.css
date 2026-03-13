@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Regra extra para o fundo não ficar branco e manter o tema */
+body {
+  background-color: #ffb703; 
+}
