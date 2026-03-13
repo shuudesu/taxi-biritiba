@@ -12,7 +12,6 @@ export default function Passageiro() {
   const [corridaAtual, setCorridaAtual] = useState(null);
   const [historico, setHistorico] = useState([]);
 
-  // ESTADOS DO CHAT
   const [mensagens, setMensagens] = useState([]);
   const [novaMsg, setNovaMsg] = useState('');
   const chatEndRef = useRef(null);
@@ -20,6 +19,7 @@ export default function Passageiro() {
   const clienteNome = localStorage.getItem('cliente_nome');
   const clienteTelefone = localStorage.getItem('cliente_telefone');
 
+  // INICIALIZAÇÃO E CHECK-UP
   useEffect(() => {
     if (!clienteNome || !clienteTelefone) {
       navigate('/login-cliente');
@@ -27,18 +27,28 @@ export default function Passageiro() {
     }
     fetchTaxistas();
     fetchHistorico();
+    checkCorridaAtiva(); // <-- O CHECK-UP AO ABRIR O APP
 
     const taxistasSub = supabase.channel('taxistas_channel').on('postgres_changes', { event: '*', schema: 'public', table: 'taxistas' }, () => fetchTaxistas()).subscribe();
     return () => supabase.removeChannel(taxistasSub);
   }, []);
 
+  // O BATIMENTO CARDÍACO (HEARTBEAT)
   useEffect(() => {
-    if (!corridaAtual) {
-      setMensagens([]); // Limpa o chat se não houver corrida
-      return;
+    let interval;
+    if (corridaAtual && corridaAtual.status === 'pendente') {
+      // Envia um sinal de vida a cada 30 segundos
+      interval = setInterval(async () => {
+        await supabase.from('corridas').update({ ultima_atualizacao: new Date().toISOString() }).eq('id', corridaAtual.id);
+      }, 30000); 
     }
+    return () => clearInterval(interval);
+  }, [corridaAtual]);
+
+  // ESCUTA DA CORRIDA E REALTIME
+  useEffect(() => {
+    if (!corridaAtual?.id) return;
     
-    // Escuta mudanças na corrida (Status)
     const corridaSub = supabase.channel('minha_corrida').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'corridas', filter: `id=eq.${corridaAtual.id}` }, async (payload) => {
         if (payload.new.status === 'aceita' && payload.new.taxista_id) {
           const { data: taxistaData } = await supabase.from('taxistas').select('nome, veiculo, placa').eq('id', payload.new.taxista_id).single();
@@ -49,11 +59,11 @@ export default function Passageiro() {
         }
 
         if (payload.new.status === 'cancelada') {
-          alert('O taxista recusou ou cancelou a chamada.');
+          // O Ceifador ou o Motorista cancelou
+          alert('Sua solicitação foi cancelada ou expirou.');
           setCorridaAtual(null);
         } else if (payload.new.status === 'em_corrida') {
-           // O motorista marcou "Passageiro Embarcado", o chat some automaticamente
-           setMensagens([]);
+           setMensagens([]); 
         } else if (payload.new.status === 'concluida') {
           alert('Chegou ao seu destino. Obrigado por usar o Ponto Virtual!');
           setCorridaAtual(null);
@@ -61,25 +71,56 @@ export default function Passageiro() {
         }
       }).subscribe();
 
-    // Busca mensagens antigas (caso recarregue a página)
+    return () => supabase.removeChannel(corridaSub);
+  }, [corridaAtual?.id]); 
+
+  // ESCUTA DO CHAT
+  useEffect(() => {
+    if (!corridaAtual?.id) {
+      setMensagens([]); 
+      return;
+    }
+
     fetchMensagens(corridaAtual.id);
 
-    // Escuta novas MENSAGENS em tempo real
     const chatSub = supabase.channel(`chat_passageiro_${corridaAtual.id}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `corrida_id=eq.${corridaAtual.id}` }, (payload) => {
         setMensagens((prev) => [...prev, payload.new]);
       }).subscribe();
       
-    return () => {
-      supabase.removeChannel(corridaSub);
-      supabase.removeChannel(chatSub);
-    };
-  }, [corridaAtual]);
+    return () => supabase.removeChannel(chatSub);
+  }, [corridaAtual?.id]); 
 
-  // Rolar o chat sempre para a última mensagem
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [mensagens]);
+
+  // FUNÇÃO DE CHECK-UP AO ABRIR O APP
+  async function checkCorridaAtiva() {
+    const { data } = await supabase.from('corridas')
+      .select('*')
+      .eq('passageiro_id', clienteTelefone)
+      .in('status', ['pendente', 'aceita', 'buscando', 'em_corrida'])
+      .order('criado_em', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (data) {
+      if (data.status === 'pendente') {
+        const lastUpdate = new Date(data.ultima_atualizacao).getTime();
+        const now = new Date().getTime();
+        // Se a corrida está pendente sem sinal de vida há mais de 2 minutos, cancela localmente
+        if (now - lastUpdate > 120000) { 
+          await supabase.from('corridas').update({ status: 'cancelada' }).eq('id', data.id);
+          alert('Seu pedido anterior expirou por inatividade.');
+        } else {
+          setCorridaAtual(data); // Recupera a corrida ativa
+        }
+      } else {
+        setCorridaAtual(data); // Se já foi aceita, apenas recupera
+      }
+    }
+  }
 
   async function fetchMensagens(corridaId) {
     const { data } = await supabase.from('mensagens').select('*').eq('corrida_id', corridaId).order('criado_em', { ascending: true });
@@ -88,12 +129,9 @@ export default function Passageiro() {
 
   async function enviarMensagem() {
     if (!novaMsg.trim()) return;
-    const { error } = await supabase.from('mensagens').insert({
-      corrida_id: corridaAtual.id,
-      remetente: 'cliente',
-      texto: novaMsg
-    });
-    if (!error) setNovaMsg('');
+    const textoSalvo = novaMsg;
+    setNovaMsg(''); 
+    await supabase.from('mensagens').insert({ corrida_id: corridaAtual.id, remetente: 'cliente', texto: textoSalvo });
   }
 
   async function fetchTaxistas() {
@@ -110,14 +148,14 @@ export default function Passageiro() {
 
   async function chamarTodos() {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
-    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: null, origem_endereco: endereco, status: 'pendente' };
+    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: null, origem_endereco: endereco, status: 'pendente', ultima_atualizacao: new Date().toISOString() };
     const { data, error } = await supabase.from('corridas').insert(novaCorrida).select().single();
     if (!error && data) setCorridaAtual(data);
   }
 
   async function chamarTaxi(taxistaId) {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
-    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: taxistaId, origem_endereco: endereco, status: 'pendente' };
+    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: taxistaId, origem_endereco: endereco, status: 'pendente', ultima_atualizacao: new Date().toISOString() };
     const { data, error } = await supabase.from('corridas').insert(novaCorrida).select().single();
     if (!error && data) setCorridaAtual(data);
   }
@@ -152,7 +190,6 @@ export default function Passageiro() {
           {corridaAtual ? (
             <div className="flex flex-col flex-1 items-center justify-center mt-2">
               
-              {/* Oculta a animação grande se o chat estiver ativo para economizar espaço */}
               {corridaAtual.status === 'pendente' && (
                 <>
                   <div className="w-24 h-24 border-4 border-black rounded-full flex items-center justify-center mb-4 shadow-[4px_4px_0px_#000] bg-[#FFE600] animate-pulse">
@@ -169,10 +206,8 @@ export default function Passageiro() {
                 </div>
               )}
 
-              {/* CHAT EFÊMERO E NEGOCIAÇÃO */}
-              {corridaAtual.status === 'aceita' && (
+              {(corridaAtual.status === 'aceita' || corridaAtual.status === 'buscando') && (
                 <div className="w-full flex flex-col flex-1 bg-white border-4 border-black rounded-2xl mb-4 shadow-[4px_4px_0px_#000] overflow-hidden">
-                  {/* Cabeçalho do Chat */}
                   <div className="bg-[#A1E636] border-b-4 border-black p-3 flex justify-between items-center">
                     <div>
                       <p className="text-[10px] font-black uppercase leading-none mb-1">Taxista a Caminho</p>
@@ -184,7 +219,6 @@ export default function Passageiro() {
                     </div>
                   </div>
 
-                  {/* Área de Mensagens */}
                   <div className="flex-1 bg-gray-50 p-3 overflow-y-auto flex flex-col gap-2 min-h-[150px] max-h-[250px]">
                     {mensagens.length === 0 && (
                       <div className="text-center my-auto text-xs font-bold text-gray-400">Combine o valor da busca no chat abaixo. Mensagens não serão salvas.</div>
@@ -197,7 +231,6 @@ export default function Passageiro() {
                     <div ref={chatEndRef} />
                   </div>
 
-                  {/* Input do Chat */}
                   <div className="p-2 border-t-4 border-black flex gap-2 bg-white">
                     <input 
                       type="text" 
@@ -219,7 +252,7 @@ export default function Passageiro() {
                 <p className="font-bold">{corridaAtual.origem_endereco}</p>
               </div>
 
-              {(corridaAtual.status === 'pendente' || corridaAtual.status === 'aceita') && (
+              {(corridaAtual.status === 'pendente' || corridaAtual.status === 'aceita' || corridaAtual.status === 'buscando') && (
                 <button onClick={cancelarPedido} className="w-full mt-4 bg-[#FF6B6B] border-4 border-black rounded-2xl py-4 font-black flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">
                   <X size={24} strokeWidth={3} /> CANCELAR PEDIDO
                 </button>

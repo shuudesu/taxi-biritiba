@@ -8,7 +8,6 @@ export default function Motorista() {
   const [activeTab, setActiveTab] = useState('home');
   const [loading, setLoading] = useState(true);
   
-  // REFS À PROVA DE FALHAS PARA O REALTIME LER SEMPRE O VALOR ATUALIZADO
   const [motorista, setMotorista] = useState(null);
   const motoristaRef = useRef(null);
   
@@ -21,12 +20,10 @@ export default function Motorista() {
   const [valorCorrida, setValorCorrida] = useState(''); 
   const [historico, setHistorico] = useState([]);
 
-  // ESTADOS DO CHAT
   const [mensagens, setMensagens] = useState([]);
   const [novaMsg, setNovaMsg] = useState('');
   const chatEndRef = useRef(null);
 
-  // FUNÇÕES SEGURAS DE ATUALIZAÇÃO
   function setMotoristaSafe(data) {
     setMotorista(data);
     motoristaRef.current = data;
@@ -40,6 +37,7 @@ export default function Motorista() {
     corridaAtualRef.current = corrida;
   }
 
+  // INICIALIZAÇÃO E O CEIFADOR (REAPER)
   useEffect(() => {
     const driverId = localStorage.getItem('driver_id');
     if (!driverId) {
@@ -51,7 +49,16 @@ export default function Motorista() {
     fetchHistorico(driverId);
     
     const canal = setupRealtimeSubscription(driverId);
-    return () => { if (canal) supabase.removeChannel(canal); };
+
+    // O CEIFADOR: Executa a limpeza do Supabase a cada 60 segundos
+    const reaperInterval = setInterval(async () => {
+      await supabase.rpc('limpar_corridas_fantasmas');
+    }, 60000);
+
+    return () => { 
+      if (canal) supabase.removeChannel(canal); 
+      clearInterval(reaperInterval);
+    };
   }, []);
 
   // CHAT: Escutar mudanças e rolar
@@ -83,14 +90,8 @@ export default function Motorista() {
   async function enviarMensagem(textoDireto = null) {
     const texto = textoDireto || novaMsg;
     if (!texto.trim()) return;
-    
     setNovaMsg(''); 
-    
-    await supabase.from('mensagens').insert({
-      corrida_id: corridaAtualRef.current.id,
-      remetente: 'motorista',
-      texto: texto
-    });
+    await supabase.from('mensagens').insert({ corrida_id: corridaAtualRef.current.id, remetente: 'motorista', texto: texto });
   }
 
   async function fetchDriverData(id) {
@@ -132,7 +133,8 @@ export default function Motorista() {
         }
         if (payload.eventType === 'UPDATE' && corridaAtualRef.current && payload.new.id === corridaAtualRef.current.id) {
           if (payload.new.status === 'cancelada') {
-            alert("O cliente cancelou o pedido.");
+            // O Cliente cancelou OU o Ceifador matou a corrida
+            alert("Sinal perdido ou o cliente cancelou. Corrida finalizada.");
             setCorridaAtualSafe(null);
             updateStatus('livre', 'online');
           } else if (payload.new.status === 'aceita' && payload.new.taxista_id !== driverId) {
@@ -200,13 +202,8 @@ export default function Motorista() {
     await supabase.from('corridas').update({ status: 'concluida', valor: parseFloat(valorCorrida) }).eq('id', corridaAtualRef.current.id);
     setCorridaAtualSafe(null);
     setValorCorrida(''); 
-    
-    // Atualiza o motorista para livre ao finalizar a corrida
     updateStatus('livre', 'online');
-    
-    if (motoristaRef.current) {
-      fetchHistorico(motoristaRef.current.id); 
-    }
+    if (motoristaRef.current) fetchHistorico(motoristaRef.current.id); 
   }
 
   function abrirWaze() {
@@ -295,7 +292,6 @@ export default function Motorista() {
                 </div>
               </div>
 
-              {/* CHAT EFÊMERO MOTORISTA */}
               <div className="w-full flex flex-col flex-1 bg-white border-4 border-black rounded-2xl mb-4 shadow-[4px_4px_0px_#000] overflow-hidden min-h-[220px]">
                 <div className="bg-[#BFFCC6] border-b-4 border-black p-2 flex justify-between items-center">
                   <span className="text-xs font-black uppercase">Negociar Busca</span>
