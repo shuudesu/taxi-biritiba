@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, MessageCircle, Navigation, User, Home, Clock, ArrowLeft, X, LogOut, Zap } from 'lucide-react';
+import { MapPin, MessageCircle, Navigation, User, Home, Clock, X, LogOut, Zap } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export default function Passageiro() {
@@ -164,7 +164,7 @@ export default function Passageiro() {
                 </div>
               </div>
 
-              {/* NOVO BOTÃO DE CHAMADA GERAL */}
+              {/* AQUI ESTÁ O BOTÃO GIGANTE DE CHAMADA GERAL */}
               <button 
                 onClick={chamarTodos} 
                 className="w-full bg-[#FFE600] border-4 border-black rounded-2xl py-5 mb-8 font-black text-lg flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all animate-pulse"
