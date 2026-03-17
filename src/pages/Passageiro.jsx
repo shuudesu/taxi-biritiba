@@ -9,6 +9,7 @@ export default function Passageiro() {
   const [taxistas, setTaxistas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [endereco, setEndereco] = useState('');
+  const [numero, setNumero] = useState('');
   const [buscandoLocalizacao, setBuscandoLocalizacao] = useState(false);
   const [corridaAtual, setCorridaAtual] = useState(null);
   const [historico, setHistorico] = useState([]);
@@ -175,11 +176,11 @@ export default function Passageiro() {
             const suburb = data.address.suburb || data.address.neighbourhood || '';
             const city = data.address.city || data.address.town || data.address.village || '';
             
-            // Formatando: Rua, Número, Bairro, Cidade
-            const enderecoBase = houseNumber ? `${road}, ${houseNumber}` : road;
-            const enderecoFormatado = `${enderecoBase}, ${suburb}, ${city}`.replace(/^[,\s]+|[,\s]+$/g, '').replace(/,[,\s]*,/g, ', ');
-            
+            const enderecoFormatado = `${road}, ${suburb}, ${city}`.replace(/^[,\s]+|[,\s]+$/g, '').replace(/,[,\s]*,/g, ', ');
             setEndereco(enderecoFormatado);
+            if (houseNumber) {
+              setNumero(houseNumber);
+            }
           } else {
             alert("Não foi possível converter a localização em endereço.");
           }
@@ -201,14 +202,16 @@ export default function Passageiro() {
 
   async function chamarTodos() {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
-    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: null, origem_endereco: endereco, status: 'pendente', ultima_atualizacao: new Date().toISOString() };
+    const enderecoCompleto = numero.trim() ? `${endereco}, ${numero}` : endereco;
+    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: null, origem_endereco: enderecoCompleto, status: 'pendente', ultima_atualizacao: new Date().toISOString() };
     const { data, error } = await supabase.from('corridas').insert(novaCorrida).select().single();
     if (!error && data) setCorridaAtual(data);
   }
 
   async function chamarTaxi(taxistaId) {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
-    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: taxistaId, origem_endereco: endereco, status: 'pendente', ultima_atualizacao: new Date().toISOString() };
+    const enderecoCompleto = numero.trim() ? `${endereco}, ${numero}` : endereco;
+    const novaCorrida = { passageiro_id: clienteTelefone, taxista_id: taxistaId, origem_endereco: enderecoCompleto, status: 'pendente', ultima_atualizacao: new Date().toISOString() };
     const { data, error } = await supabase.from('corridas').insert(novaCorrida).select().single();
     if (!error && data) setCorridaAtual(data);
   }
@@ -354,18 +357,21 @@ export default function Passageiro() {
           ) : (
             <>
               <div className="mb-6">
-                <label className="font-black uppercase text-xs mb-1 block">Onde você está? (Rua, Nº e Cidade)</label>
-                <div className="relative flex items-center">
-                  <input type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Ex: Rua São João, 123, Bairro, Mogi das Cruzes" className="w-full bg-white border-4 border-black rounded-2xl py-4 pl-12 pr-14 font-bold text-lg outline-none focus:border-[#4DF0FF] shadow-[4px_4px_0px_#000] transition-all" />
-                  <MapPin size={20} strokeWidth={3} className="absolute left-4 text-gray-400" />
-                  <button 
-                    onClick={obterLocalizacao} 
-                    disabled={buscandoLocalizacao}
-                    className={`absolute right-2 p-2 rounded-xl transition-all ${buscandoLocalizacao ? 'text-gray-400' : 'text-black hover:text-[#4DF0FF] active:scale-90 flex justify-center items-center'}`}
-                    title="Usar minha localização atual"
-                  >
-                    <LocateFixed size={24} strokeWidth={3} className={buscandoLocalizacao ? 'animate-spin' : ''} />
-                  </button>
+                <label className="font-black uppercase text-xs mb-1 block">Onde você está?</label>
+                <div className="flex gap-2">
+                  <div className="relative flex items-center flex-1">
+                    <input type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Rua e Cidade" className="w-full bg-white border-4 border-black rounded-2xl py-4 pl-12 pr-12 font-bold text-lg outline-none focus:border-[#4DF0FF] shadow-[4px_4px_0px_#000] transition-all" />
+                    <MapPin size={20} strokeWidth={3} className="absolute left-4 text-gray-400" />
+                    <button 
+                      onClick={obterLocalizacao} 
+                      disabled={buscandoLocalizacao}
+                      className={`absolute right-2 p-2 rounded-xl transition-all ${buscandoLocalizacao ? 'text-gray-400' : 'text-black hover:text-[#4DF0FF] active:scale-90 flex justify-center items-center'}`}
+                      title="Usar minha localização atual"
+                    >
+                      <LocateFixed size={24} strokeWidth={3} className={buscandoLocalizacao ? 'animate-spin' : ''} />
+                    </button>
+                  </div>
+                  <input type="text" value={numero} onChange={(e) => setNumero(e.target.value)} placeholder="Nº" className="w-24 bg-white border-4 border-black rounded-2xl py-4 px-4 font-bold text-center text-lg outline-none focus:border-[#4DF0FF] shadow-[4px_4px_0px_#000] transition-all" />
                 </div>
               </div>
 
