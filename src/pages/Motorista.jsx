@@ -7,17 +7,17 @@ export default function Motorista() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('home');
   const [loading, setLoading] = useState(true);
-  
+
   const [motorista, setMotorista] = useState(null);
   const motoristaRef = useRef(null);
-  
+
   const [driverState, setDriverState] = useState('offline');
   const driverStateRef = useRef('offline');
-  
+
   const [corridaAtual, setCorridaAtual] = useState(null);
   const corridaAtualRef = useRef(null);
-  
-  const [valorCorrida, setValorCorrida] = useState(''); 
+
+  const [valorCorrida, setValorCorrida] = useState('');
   const [historico, setHistorico] = useState([]);
 
   const [mensagens, setMensagens] = useState([]);
@@ -37,61 +37,9 @@ export default function Motorista() {
     corridaAtualRef.current = corrida;
   }
 
-  // INICIALIZAÇÃO E O CEIFADOR (REAPER)
-  useEffect(() => {
-    const driverId = localStorage.getItem('driver_id');
-    if (!driverId) {
-      navigate('/login-motorista');
-      return;
-    }
-    fetchDriverData(driverId);
-    fetchCorridaAtiva(driverId);
-    fetchHistorico(driverId);
-    
-    const canal = setupRealtimeSubscription(driverId);
-
-    // O CEIFADOR: Executa a limpeza do Supabase a cada 60 segundos
-    const reaperInterval = setInterval(async () => {
-      await supabase.rpc('limpar_corridas_fantasmas');
-    }, 60000);
-
-    return () => { 
-      if (canal) supabase.removeChannel(canal); 
-      clearInterval(reaperInterval);
-    };
-  }, []);
-
-  // CHAT: Escutar mudanças e rolar
-  useEffect(() => {
-    if (!corridaAtual?.id) {
-      setMensagens([]);
-      return;
-    }
-    
-    fetchMensagens(corridaAtual.id);
-
-    const chatSub = supabase.channel(`chat_motorista_${corridaAtual.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `corrida_id=eq.${corridaAtual.id}` }, (payload) => {
-        setMensagens((prev) => [...prev, payload.new]);
-      }).subscribe();
-
-    return () => supabase.removeChannel(chatSub);
-  }, [corridaAtual?.id]); 
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [mensagens]);
-
   async function fetchMensagens(corridaId) {
     const { data } = await supabase.from('mensagens').select('*').eq('corrida_id', corridaId).order('criado_em', { ascending: true });
     if (data) setMensagens(data);
-  }
-
-  async function enviarMensagem(textoDireto = null) {
-    const texto = textoDireto || novaMsg;
-    if (!texto.trim()) return;
-    setNovaMsg(''); 
-    await supabase.from('mensagens').insert({ corrida_id: corridaAtualRef.current.id, remetente: 'motorista', texto: texto });
   }
 
   async function fetchDriverData(id) {
@@ -117,6 +65,88 @@ export default function Motorista() {
       if (data.status === 'em_corrida') setDriverStateSafe('em_corrida');
     }
   }
+
+  async function updateStatus(newDbStatus, newUiState) {
+    const motoristaAtual = motoristaRef.current;
+    if (!motoristaAtual) return;
+
+    await supabase.from('taxistas').update({ status: newDbStatus }).eq('id', motoristaAtual.id);
+    setDriverStateSafe(newUiState);
+    setMotoristaSafe({ ...motoristaAtual, status: newDbStatus });
+  }
+
+  function setupRealtimeSubscription(driverId) {
+    return supabase.channel(`canal_motorista_${driverId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'corridas' }, (payload) => {
+        if (payload.eventType === 'INSERT' && payload.new.status === 'pendente') {
+          const isParaMim = payload.new.taxista_id === driverId;
+          const isGeral = payload.new.taxista_id === null;
+          const isEstouOnline = driverStateRef.current === 'online';
+
+          if ((isParaMim || isGeral) && isEstouOnline) {
+            setCorridaAtualSafe(payload.new);
+            setDriverStateSafe('tocando');
+          }
+        }
+        if (payload.eventType === 'UPDATE' && corridaAtualRef.current && payload.new.id === corridaAtualRef.current.id) {
+          if (payload.new.status === 'cancelada') {
+            // O Cliente cancelou OU o Ceifador matou a corrida
+            alert("Sinal perdido ou o cliente cancelou. Corrida finalizada.");
+            setCorridaAtualSafe(null);
+            updateStatus('livre', 'online');
+          } else if (payload.new.status === 'aceita' && payload.new.taxista_id !== driverId) {
+            alert("Esta corrida foi aceita por outro colega. Boa sorte na próxima!");
+            setCorridaAtualSafe(null);
+            updateStatus('livre', 'online');
+          }
+        }
+      }).subscribe();
+  }
+
+  // INICIALIZAÇÃO E O CEIFADOR (REAPER)
+  useEffect(() => {
+    const driverId = localStorage.getItem('driver_id');
+    if (!driverId) {
+      navigate('/login-motorista');
+      return;
+    }
+    fetchDriverData(driverId);
+    fetchCorridaAtiva(driverId);
+    fetchHistorico(driverId);
+
+    const canal = setupRealtimeSubscription(driverId);
+
+    // O CEIFADOR: Executa a limpeza do Supabase a cada 60 segundos
+    const reaperInterval = setInterval(async () => {
+      await supabase.rpc('limpar_corridas_fantasmas');
+    }, 60000);
+
+    return () => {
+      if (canal) supabase.removeChannel(canal);
+      clearInterval(reaperInterval);
+    };
+  }, []);
+
+  // CHAT: Escutar mudanças e rolar
+  useEffect(() => {
+    if (!corridaAtual?.id) {
+      setMensagens([]);
+      return;
+    }
+
+    fetchMensagens(corridaAtual.id);
+
+    const chatSub = supabase.channel(`chat_motorista_${corridaAtual.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `corrida_id=eq.${corridaAtual.id}` }, (payload) => {
+        setMensagens((prev) => [...prev, payload.new]);
+      }).subscribe();
+
+    return () => supabase.removeChannel(chatSub);
+  }, [corridaAtual?.id]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [mensagens]);
 
   function setupRealtimeSubscription(driverId) {
     return supabase.channel(`canal_motorista_${driverId}`)
@@ -149,7 +179,7 @@ export default function Motorista() {
   async function updateStatus(newDbStatus, newUiState) {
     const motoristaAtual = motoristaRef.current;
     if (!motoristaAtual) return;
-    
+
     await supabase.from('taxistas').update({ status: newDbStatus }).eq('id', motoristaAtual.id);
     setDriverStateSafe(newUiState);
     setMotoristaSafe({ ...motoristaAtual, status: newDbStatus });
@@ -171,10 +201,10 @@ export default function Motorista() {
       .single();
 
     if (error || !data) {
-       alert("Ops! Esta corrida já foi pega por outro motorista ou cancelada.");
-       setCorridaAtualSafe(null);
-       updateStatus('livre', 'online');
-       return;
+      alert("Ops! Esta corrida já foi pega por outro motorista ou cancelada.");
+      setCorridaAtualSafe(null);
+      updateStatus('livre', 'online');
+      return;
     }
 
     setCorridaAtualSafe(data);
@@ -201,20 +231,20 @@ export default function Motorista() {
     if (!valorCorrida) return alert("Digite o valor da corrida!");
     await supabase.from('corridas').update({ status: 'concluida', valor: parseFloat(valorCorrida) }).eq('id', corridaAtualRef.current.id);
     setCorridaAtualSafe(null);
-    setValorCorrida(''); 
+    setValorCorrida('');
     updateStatus('livre', 'online');
-    if (motoristaRef.current) fetchHistorico(motoristaRef.current.id); 
+    if (motoristaRef.current) fetchHistorico(motoristaRef.current.id);
   }
 
   function abrirWaze() {
     if (!corridaAtualRef.current?.origem_endereco) return;
-    const enderecoFormatado = encodeURIComponent(`${corridaAtualRef.current.origem_endereco}, Biritiba Mirim`);
+    const enderecoFormatado = encodeURIComponent(corridaAtualRef.current.origem_endereco);
     window.open(`https://waze.com/ul?q=${enderecoFormatado}`, '_blank');
   }
 
   function abrirGoogleMaps() {
     if (!corridaAtualRef.current?.origem_endereco) return;
-    const enderecoFormatado = encodeURIComponent(`${corridaAtualRef.current.origem_endereco}, Biritiba Mirim`);
+    const enderecoFormatado = encodeURIComponent(corridaAtualRef.current.origem_endereco);
     window.open(`https://www.google.com/maps/search/?api=1&query=${enderecoFormatado}`, '_blank');
   }
 
@@ -230,7 +260,12 @@ export default function Motorista() {
           <div className="w-12 h-12 bg-[#FF90E8] border-2 border-black rounded-full flex justify-center items-center text-2xl shadow-[2px_2px_0px_#000]">👨🏽‍🦲</div>
           <div>
             <h1 className="text-lg font-black tracking-tight leading-none">{motorista.nome}</h1>
-            <p className="text-[10px] font-bold text-gray-600 mt-1 uppercase">Táxi Oficial</p>
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-[10px] font-bold text-gray-600 uppercase">Táxi Oficial</p>
+              <div className="flex items-center gap-0.5 bg-yellow-100 px-1 rounded border border-yellow-400">
+                <span className="text-[10px] font-black text-yellow-600">⭐ {motorista.rating_medio ? Number(motorista.rating_medio).toFixed(1) : '5.0'}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -314,7 +349,7 @@ export default function Motorista() {
                 </div>
 
                 <div className="p-2 border-t-2 border-black flex gap-2 bg-white">
-                  <input type="text" value={novaMsg} onChange={(e) => setNovaMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && enviarMensagem()} placeholder="Ou digite..." className="flex-1 bg-gray-100 border-2 border-black rounded-lg px-2 font-bold text-xs outline-none focus:border-[#4DF0FF]"/>
+                  <input type="text" value={novaMsg} onChange={(e) => setNovaMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && enviarMensagem()} placeholder="Ou digite..." className="flex-1 bg-gray-100 border-2 border-black rounded-lg px-2 font-bold text-xs outline-none focus:border-[#4DF0FF]" />
                   <button onClick={() => enviarMensagem()} className="bg-[#FFE600] border-2 border-black p-2 rounded-lg shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none flex items-center justify-center">
                     <Send size={16} strokeWidth={3} />
                   </button>
@@ -384,9 +419,15 @@ export default function Motorista() {
             <User size={48} strokeWidth={2.5} />
           </div>
           <h2 className="text-2xl font-black uppercase tracking-tight">{motorista.nome}</h2>
-          <p className="text-lg font-bold text-gray-600 mb-2">{motorista.veiculo}</p>
-          <p className="text-sm font-black bg-gray-200 px-3 py-1 rounded-md border-2 border-black mb-10">{motorista.placa}</p>
-          
+
+          <div className="flex gap-2 mb-2 mt-1">
+            <span className="text-sm font-black bg-[#FFE600] px-3 py-1 rounded border-2 border-black">⭐ {motorista.rating_medio ? Number(motorista.rating_medio).toFixed(1) : '5.0'}</span>
+            <span className="text-sm font-bold bg-white text-gray-600 px-3 py-1 rounded border-2 border-black">{motorista.total_avaliacoes || 0} avaliações</span>
+          </div>
+
+          <p className="text-lg font-bold text-gray-600 mt-2">{motorista.veiculo}</p>
+          <p className="text-sm font-black bg-gray-200 px-3 py-1 rounded-md border-2 border-black mb-10 mt-1">{motorista.placa}</p>
+
           <button onClick={handleLogout} className="w-full bg-[#FF6B6B] border-4 border-black rounded-2xl py-4 font-black flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">
             <LogOut size={24} strokeWidth={3} /> SAIR DA CONTA
           </button>

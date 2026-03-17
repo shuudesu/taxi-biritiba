@@ -16,8 +16,61 @@ export default function Passageiro() {
   const [novaMsg, setNovaMsg] = useState('');
   const chatEndRef = useRef(null);
 
+  const [modalAvaliacaoOpen, setModalAvaliacaoOpen] = useState(false);
+  const [ratingDado, setRatingDado] = useState(0);
+  const [corridaParaAvaliar, setCorridaParaAvaliar] = useState(null);
+
   const clienteNome = localStorage.getItem('cliente_nome');
   const clienteTelefone = localStorage.getItem('cliente_telefone');
+
+  // FUNÇÃO DE CHECK-UP AO ABRIR O APP
+  async function checkCorridaAtiva() {
+    const { data } = await supabase.from('corridas')
+      .select('*')
+      .eq('passageiro_id', clienteTelefone)
+      .in('status', ['pendente', 'aceita', 'buscando', 'em_corrida'])
+      .order('criado_em', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (data) {
+      if (data.status === 'pendente') {
+        const lastUpdate = new Date(data.ultima_atualizacao).getTime();
+        const now = new Date().getTime();
+        // Se a corrida está pendente sem sinal de vida há mais de 2 minutos, cancela localmente
+        if (now - lastUpdate > 120000) {
+          await supabase.from('corridas').update({ status: 'cancelada' }).eq('id', data.id);
+          alert('Seu pedido anterior expirou por inatividade.');
+        } else {
+          setCorridaAtual(data); // Recupera a corrida ativa
+        }
+      } else {
+        setCorridaAtual(data); // Se já foi aceita, apenas recupera
+      }
+    }
+  }
+
+  async function fetchMensagens(corridaId) {
+    const { data } = await supabase.from('mensagens').select('*').eq('corrida_id', corridaId).order('criado_em', { ascending: true });
+    if (data) setMensagens(data);
+  }
+
+  async function fetchTaxistas() {
+    setLoading(true);
+    const { data } = await supabase.from('taxistas')
+      .select('*')
+      .neq('status', 'offline')
+      .order('status', { ascending: false }) // primeiro 'livre', depois 'ocupado'
+      .order('rating_medio', { ascending: false }); // ordena também pela nota
+
+    if (data) setTaxistas(data);
+    setLoading(false);
+  }
+
+  async function fetchHistorico() {
+    const { data } = await supabase.from('corridas').select(`*, taxistas (nome)`).eq('passageiro_id', clienteTelefone).order('criado_em', { ascending: false });
+    if (data) setHistorico(data);
+  }
 
   // INICIALIZAÇÃO E CHECK-UP
   useEffect(() => {
@@ -40,7 +93,7 @@ export default function Passageiro() {
       // Envia um sinal de vida a cada 30 segundos
       interval = setInterval(async () => {
         await supabase.from('corridas').update({ ultima_atualizacao: new Date().toISOString() }).eq('id', corridaAtual.id);
-      }, 30000); 
+      }, 30000);
     }
     return () => clearInterval(interval);
   }, [corridaAtual]);
@@ -48,36 +101,34 @@ export default function Passageiro() {
   // ESCUTA DA CORRIDA E REALTIME
   useEffect(() => {
     if (!corridaAtual?.id) return;
-    
-    const corridaSub = supabase.channel('minha_corrida').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'corridas', filter: `id=eq.${corridaAtual.id}` }, async (payload) => {
-        if (payload.new.status === 'aceita' && payload.new.taxista_id) {
-          const { data: taxistaData } = await supabase.from('taxistas').select('nome, veiculo, placa').eq('id', payload.new.taxista_id).single();
-          setCorridaAtual({ ...payload.new, taxistas: taxistaData });
-        } 
-        else {
-          setCorridaAtual(payload.new);
-        }
 
-        if (payload.new.status === 'cancelada') {
-          // O Ceifador ou o Motorista cancelou
-          alert('Sua solicitação foi cancelada ou expirou.');
-          setCorridaAtual(null);
-        } else if (payload.new.status === 'em_corrida') {
-           setMensagens([]); 
-        } else if (payload.new.status === 'concluida') {
-          alert('Chegou ao seu destino. Obrigado por usar o Ponto Virtual!');
-          setCorridaAtual(null);
-          fetchHistorico(); 
-        }
-      }).subscribe();
+    const corridaSub = supabase.channel('minha_corrida').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'corridas', filter: `id=eq.${corridaAtual.id}` }, async (payload) => {
+      if (payload.new.status === 'aceita' && payload.new.taxista_id) {
+        const { data: taxistaData } = await supabase.from('taxistas').select('nome, veiculo, placa').eq('id', payload.new.taxista_id).single();
+        setCorridaAtual({ ...payload.new, taxistas: taxistaData });
+      }
+      else {
+        setCorridaAtual(payload.new);
+      }
+
+      if (payload.new.status === 'cancelada') {
+        alert('Sua solicitação foi cancelada ou expirou.');
+        setCorridaAtual(null);
+      } else if (payload.new.status === 'concluida') {
+        setCorridaParaAvaliar(payload.new);
+        setModalAvaliacaoOpen(true);
+        setCorridaAtual(null);
+        fetchHistorico();
+      }
+    }).subscribe();
 
     return () => supabase.removeChannel(corridaSub);
-  }, [corridaAtual?.id]); 
+  }, [corridaAtual?.id]);
 
   // ESCUTA DO CHAT
   useEffect(() => {
     if (!corridaAtual?.id) {
-      setMensagens([]); 
+      if (mensagens.length > 0) setMensagens([]);
       return;
     }
 
@@ -87,64 +138,21 @@ export default function Passageiro() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `corrida_id=eq.${corridaAtual.id}` }, (payload) => {
         setMensagens((prev) => [...prev, payload.new]);
       }).subscribe();
-      
+
     return () => supabase.removeChannel(chatSub);
-  }, [corridaAtual?.id]); 
+  }, [corridaAtual?.id]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [mensagens]);
 
-  // FUNÇÃO DE CHECK-UP AO ABRIR O APP
-  async function checkCorridaAtiva() {
-    const { data } = await supabase.from('corridas')
-      .select('*')
-      .eq('passageiro_id', clienteTelefone)
-      .in('status', ['pendente', 'aceita', 'buscando', 'em_corrida'])
-      .order('criado_em', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (data) {
-      if (data.status === 'pendente') {
-        const lastUpdate = new Date(data.ultima_atualizacao).getTime();
-        const now = new Date().getTime();
-        // Se a corrida está pendente sem sinal de vida há mais de 2 minutos, cancela localmente
-        if (now - lastUpdate > 120000) { 
-          await supabase.from('corridas').update({ status: 'cancelada' }).eq('id', data.id);
-          alert('Seu pedido anterior expirou por inatividade.');
-        } else {
-          setCorridaAtual(data); // Recupera a corrida ativa
-        }
-      } else {
-        setCorridaAtual(data); // Se já foi aceita, apenas recupera
-      }
-    }
-  }
-
-  async function fetchMensagens(corridaId) {
-    const { data } = await supabase.from('mensagens').select('*').eq('corrida_id', corridaId).order('criado_em', { ascending: true });
-    if (data) setMensagens(data);
-  }
-
   async function enviarMensagem() {
     if (!novaMsg.trim()) return;
     const textoSalvo = novaMsg;
-    setNovaMsg(''); 
+    setNovaMsg('');
     await supabase.from('mensagens').insert({ corrida_id: corridaAtual.id, remetente: 'cliente', texto: textoSalvo });
   }
 
-  async function fetchTaxistas() {
-    setLoading(true);
-    const { data } = await supabase.from('taxistas').select('*').neq('status', 'offline').order('status', { ascending: false });
-    if (data) setTaxistas(data);
-    setLoading(false);
-  }
-
-  async function fetchHistorico() {
-    const { data } = await supabase.from('corridas').select(`*, taxistas (nome)`).eq('passageiro_id', clienteTelefone).order('criado_em', { ascending: false });
-    if (data) setHistorico(data);
-  }
 
   async function chamarTodos() {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
@@ -171,6 +179,46 @@ export default function Passageiro() {
     navigate('/');
   }
 
+  async function enviarAvaliacao() {
+    if (!corridaParaAvaliar || ratingDado === 0) return;
+
+    // 1. Inserir a avaliação no histórico
+    await supabase.from('avaliacoes').insert({
+      corrida_id: corridaParaAvaliar.id,
+      taxista_id: corridaParaAvaliar.taxista_id,
+      passageiro_id: clienteTelefone,
+      nota: ratingDado
+    });
+
+    // 2. Buscar o total de avaliações do taxista
+    const { data: taxistaData } = await supabase
+      .from('taxistas')
+      .select('rating_medio, total_avaliacoes')
+      .eq('id', corridaParaAvaliar.taxista_id)
+      .single();
+
+    if (taxistaData) {
+      // 3. Recalcular a nova média ponderada
+      const avaliacoesAnteriores = taxistaData.total_avaliacoes || 0;
+      const mediaAnterior = taxistaData.rating_medio || 5.0;
+
+      const novoTotal = avaliacoesAnteriores + 1;
+      const somaAnterior = mediaAnterior * avaliacoesAnteriores;
+      const novaMedia = (somaAnterior + ratingDado) / novoTotal;
+
+      // 4. Atualizar os dados do taxista no banco
+      await supabase.from('taxistas').update({
+        rating_medio: novaMedia.toFixed(2),
+        total_avaliacoes: novoTotal
+      }).eq('id', corridaParaAvaliar.taxista_id);
+    }
+
+    setModalAvaliacaoOpen(false);
+    setCorridaParaAvaliar(null);
+    setRatingDado(0);
+    alert('Chegou ao seu destino. Obrigado por avaliar nosso taxista!');
+  }
+
   return (
     <div className="flex flex-col h-full overflow-y-auto pb-24 pr-1 relative">
       <div className="flex justify-between items-center mb-6 border-b-4 border-black pb-4 shrink-0 mt-2">
@@ -189,7 +237,7 @@ export default function Passageiro() {
         <>
           {corridaAtual ? (
             <div className="flex flex-col flex-1 items-center justify-center mt-2">
-              
+
               {corridaAtual.status === 'pendente' && (
                 <>
                   <div className="w-24 h-24 border-4 border-black rounded-full flex items-center justify-center mb-4 shadow-[4px_4px_0px_#000] bg-[#FFE600] animate-pulse">
@@ -232,12 +280,12 @@ export default function Passageiro() {
                   </div>
 
                   <div className="p-2 border-t-4 border-black flex gap-2 bg-white">
-                    <input 
-                      type="text" 
-                      value={novaMsg} 
+                    <input
+                      type="text"
+                      value={novaMsg}
                       onChange={(e) => setNovaMsg(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && enviarMensagem()}
-                      placeholder="Combine o valor aqui..." 
+                      placeholder="Combine o valor aqui..."
                       className="flex-1 bg-gray-100 border-2 border-black rounded-xl px-3 font-bold text-sm outline-none focus:border-[#4DF0FF]"
                     />
                     <button onClick={enviarMensagem} className="bg-[#FFE600] border-2 border-black p-3 rounded-xl shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all flex items-center justify-center">
@@ -261,9 +309,9 @@ export default function Passageiro() {
           ) : (
             <>
               <div className="mb-6">
-                <label className="font-black uppercase text-xs mb-1 block">Onde você está?</label>
+                <label className="font-black uppercase text-xs mb-1 block">Onde você está? (Rua, Nº e Cidade)</label>
                 <div className="relative">
-                  <input type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Ex: Rua do Comércio, 123" className="w-full bg-white border-4 border-black rounded-2xl py-4 px-4 pl-12 font-bold text-lg outline-none focus:border-[#4DF0FF] shadow-[4px_4px_0px_#000] transition-all" />
+                  <input type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Ex: Rua São João, 123, Bairro, Mogi das Cruzes" className="w-full bg-white border-4 border-black rounded-2xl py-4 px-4 pl-12 font-bold text-lg outline-none focus:border-[#4DF0FF] shadow-[4px_4px_0px_#000] transition-all" />
                   <MapPin size={20} strokeWidth={3} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                 </div>
               </div>
@@ -273,7 +321,7 @@ export default function Passageiro() {
               </button>
 
               <h2 className="text-lg font-black mb-4 uppercase tracking-tight shrink-0">Ou escolha no ponto:</h2>
-              
+
               {loading ? (
                 <div className="text-center font-bold text-gray-600 mt-10 animate-pulse">Buscando taxistas...</div>
               ) : taxistas.length === 0 ? (
@@ -286,8 +334,16 @@ export default function Passageiro() {
                         <div className="flex items-center gap-3">
                           <div className="w-14 h-14 bg-gray-200 border-2 border-black rounded-full flex justify-center items-center text-3xl shadow-[2px_2px_0px_#000]">🚕</div>
                           <div>
-                            <h3 className="font-black text-lg leading-none mb-1">{taxista.nome}</h3>
-                            <p className="text-sm font-bold text-gray-600">{taxista.veiculo}</p>
+                            <div className="flex items-center gap-2 mb-1">
+                              <h3 className="font-black text-lg leading-none">{taxista.nome}</h3>
+                              {taxista.rating_medio >= 4.8 && taxista.total_avaliacoes >= 5 && (
+                                <span className="bg-[#FFE600] text-[10px] font-black px-1.5 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000]">Destaque</span>
+                              )}
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              <p className="text-sm font-bold text-gray-600 leading-none">{taxista.veiculo}</p>
+                              <p className="text-xs font-black text-yellow-500 tracking-tight">⭐ {taxista.rating_medio ? Number(taxista.rating_medio).toFixed(1) : '5.0'} <span className="text-gray-400 font-bold ml-1 text-[10px]">({taxista.total_avaliacoes || 0} viagens)</span></p>
+                            </div>
                           </div>
                         </div>
                         {taxista.status === 'livre' ? <span className="text-xs font-black bg-[#A1E636] border-2 border-black px-2 py-1 rounded-full shadow-[2px_2px_0px_#000]">LIVRE</span> : <span className="text-xs font-black bg-gray-300 border-2 border-black px-2 py-1 rounded-full shadow-[2px_2px_0px_#000]">OCUPADO</span>}
@@ -326,7 +382,7 @@ export default function Passageiro() {
           )}
         </div>
       )}
-      
+
       {activeTab === 'perfil' && (
         <div className="flex flex-col h-full items-center justify-center flex-1">
           <div className="w-24 h-24 bg-[#BFFCC6] border-4 border-black rounded-full flex justify-center items-center mb-6 shadow-[4px_4px_0px_#000]">
@@ -334,7 +390,7 @@ export default function Passageiro() {
           </div>
           <h2 className="text-2xl font-black uppercase tracking-tight">{clienteNome}</h2>
           <p className="text-lg font-bold text-gray-600 mb-10">{clienteTelefone}</p>
-          
+
           <button onClick={handleLogout} className="w-full bg-[#FF6B6B] border-4 border-black rounded-2xl py-4 font-black flex justify-center items-center gap-2 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all">
             <LogOut size={24} strokeWidth={3} /> SAIR DA CONTA
           </button>
@@ -358,6 +414,54 @@ export default function Passageiro() {
           <span className="text-[10px] font-black uppercase">Perfil</span>
         </button>
       </div>
+
+      {modalAvaliacaoOpen && corridaParaAvaliar && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+          <div className="bg-white border-4 border-black rounded-3xl p-6 w-full max-w-[340px] shadow-[8px_8px_0px_#A1E636] flex flex-col items-center">
+            <h2 className="text-2xl font-black uppercase tracking-tight text-center mb-2">Viagem Concluída!</h2>
+            <p className="text-sm font-bold text-gray-600 mb-6 text-center">Como foi sua experiência com o(a) taxista?</p>
+
+            <div className="flex gap-2 justify-center mb-8">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  onClick={() => setRatingDado(star)}
+                  className="active:scale-90 transition-transform"
+                >
+                  <svg
+                    width="40" height="40"
+                    viewBox="0 0 24 24"
+                    fill={ratingDado >= star ? "#FFE600" : "transparent"}
+                    stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    className="drop-shadow-[2px_2px_0px_#000]"
+                  >
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  </svg>
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={enviarAvaliacao}
+              disabled={ratingDado === 0}
+              className={`w-full border-4 border-black rounded-xl py-3 font-black text-lg transition-all ${ratingDado === 0 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-[#A1E636] shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none'}`}
+            >
+              ENVIAR AVALIAÇÃO
+            </button>
+            <button
+              onClick={() => {
+                setModalAvaliacaoOpen(false);
+                setCorridaParaAvaliar(null);
+                setRatingDado(0);
+                alert('Chegou ao seu destino. Obrigado por usar o Ponto Virtual!');
+              }}
+              className="mt-4 text-xs font-bold text-gray-500 underline"
+            >
+              Pular avaliação
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
