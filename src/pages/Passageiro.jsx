@@ -171,10 +171,14 @@ export default function Passageiro() {
           
           if (data && data.address) {
             const road = data.address.road || '';
+            const houseNumber = data.address.house_number || '';
             const suburb = data.address.suburb || data.address.neighbourhood || '';
             const city = data.address.city || data.address.town || data.address.village || '';
             
-            const enderecoFormatado = `${road}, ${suburb}, ${city}`.replace(/^[,\s]+|[,\s]+$/g, '').replace(/,[,\s]*,/g, ', ');
+            // Formatando: Rua, Número, Bairro, Cidade
+            const enderecoBase = houseNumber ? `${road}, ${houseNumber}` : road;
+            const enderecoFormatado = `${enderecoBase}, ${suburb}, ${city}`.replace(/^[,\s]+|[,\s]+$/g, '').replace(/,[,\s]*,/g, ', ');
+            
             setEndereco(enderecoFormatado);
           } else {
             alert("Não foi possível converter a localização em endereço.");
