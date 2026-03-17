@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, MessageCircle, Navigation, User, Home, Clock, X, LogOut, Zap, Send } from 'lucide-react';
+import { MapPin, MessageCircle, Navigation, User, Home, Clock, X, LogOut, Zap, Send, LocateFixed } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export default function Passageiro() {
@@ -9,6 +9,7 @@ export default function Passageiro() {
   const [taxistas, setTaxistas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [endereco, setEndereco] = useState('');
+  const [buscandoLocalizacao, setBuscandoLocalizacao] = useState(false);
   const [corridaAtual, setCorridaAtual] = useState(null);
   const [historico, setHistorico] = useState([]);
 
@@ -153,6 +154,46 @@ export default function Passageiro() {
     await supabase.from('mensagens').insert({ corrida_id: corridaAtual.id, remetente: 'cliente', texto: textoSalvo });
   }
 
+
+  async function obterLocalizacao() {
+    if (!navigator.geolocation) {
+      alert("Geolocalização não é suportada pelo seu navegador.");
+      return;
+    }
+
+    setBuscandoLocalizacao(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
+          const data = await response.json();
+          
+          if (data && data.address) {
+            const road = data.address.road || '';
+            const suburb = data.address.suburb || data.address.neighbourhood || '';
+            const city = data.address.city || data.address.town || data.address.village || '';
+            
+            const enderecoFormatado = `${road}, ${suburb}, ${city}`.replace(/^[,\s]+|[,\s]+$/g, '').replace(/,[,\s]*,/g, ', ');
+            setEndereco(enderecoFormatado);
+          } else {
+            alert("Não foi possível converter a localização em endereço.");
+          }
+        } catch (error) {
+          console.error("Erro ao buscar endereço:", error);
+          alert("Erro ao buscar o endereço automaticamente.");
+        } finally {
+          setBuscandoLocalizacao(false);
+        }
+      },
+      (error) => {
+        console.error("Erro de geolocalização:", error);
+        alert("Por favor, ative a localização do seu dispositivo para podermos encontrar seu endereço automaticamente.");
+        setBuscandoLocalizacao(false);
+      },
+      { enableHighAccuracy: true }
+    );
+  }
 
   async function chamarTodos() {
     if (!endereco.trim()) return alert('Digite o seu endereço de partida!');
@@ -310,9 +351,17 @@ export default function Passageiro() {
             <>
               <div className="mb-6">
                 <label className="font-black uppercase text-xs mb-1 block">Onde você está? (Rua, Nº e Cidade)</label>
-                <div className="relative">
-                  <input type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Ex: Rua São João, 123, Bairro, Mogi das Cruzes" className="w-full bg-white border-4 border-black rounded-2xl py-4 px-4 pl-12 font-bold text-lg outline-none focus:border-[#4DF0FF] shadow-[4px_4px_0px_#000] transition-all" />
-                  <MapPin size={20} strokeWidth={3} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                <div className="relative flex items-center">
+                  <input type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Ex: Rua São João, 123, Bairro, Mogi das Cruzes" className="w-full bg-white border-4 border-black rounded-2xl py-4 pl-12 pr-14 font-bold text-lg outline-none focus:border-[#4DF0FF] shadow-[4px_4px_0px_#000] transition-all" />
+                  <MapPin size={20} strokeWidth={3} className="absolute left-4 text-gray-400" />
+                  <button 
+                    onClick={obterLocalizacao} 
+                    disabled={buscandoLocalizacao}
+                    className={`absolute right-2 p-2 rounded-xl transition-all ${buscandoLocalizacao ? 'text-gray-400' : 'text-black hover:text-[#4DF0FF] active:scale-90 flex justify-center items-center'}`}
+                    title="Usar minha localização atual"
+                  >
+                    <LocateFixed size={24} strokeWidth={3} className={buscandoLocalizacao ? 'animate-spin' : ''} />
+                  </button>
                 </div>
               </div>
 
