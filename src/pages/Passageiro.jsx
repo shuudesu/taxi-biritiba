@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, MessageCircle, Navigation, User, Home, Clock, X, LogOut, Zap, Send, LocateFixed } from 'lucide-react';
+import { MapPin, MessageCircle, Navigation, User, Home, Clock, X, LogOut, Zap, Send, LocateFixed, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { usePwa } from '../PwaContext';
 
 export default function Passageiro() {
   const navigate = useNavigate();
+  const { deferredPrompt, handleInstall } = usePwa();
   const [activeTab, setActiveTab] = useState('home');
   const [taxistas, setTaxistas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -279,6 +281,15 @@ export default function Passageiro() {
             <p className="text-[10px] font-bold text-gray-700 uppercase">Olá, {clienteNome}</p>
           </div>
         </div>
+        {deferredPrompt && (
+          <button 
+            onClick={handleInstall}
+            className="bg-[#A1E636] border-2 border-black rounded-xl p-2 shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all flex flex-col items-center justify-center animate-bounce"
+            title="Baixar App"
+          >
+            <Download size={20} strokeWidth={3} />
+          </button>
+        )}
       </div>
 
       {activeTab === 'home' && (

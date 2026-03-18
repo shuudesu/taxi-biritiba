@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Power, Car, LogOut, Check, X, MapPin, Flag, Home, DollarSign, User, Send } from 'lucide-react';
+import { Power, Car, LogOut, Check, X, MapPin, Flag, Home, DollarSign, User, Send, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { usePwa } from '../PwaContext';
 
 export default function Motorista() {
   const navigate = useNavigate();
+  const { deferredPrompt, handleInstall } = usePwa();
   const [activeTab, setActiveTab] = useState('home');
   const [loading, setLoading] = useState(true);
 
@@ -268,6 +270,15 @@ export default function Motorista() {
             </div>
           </div>
         </div>
+        {deferredPrompt && (
+          <button 
+            onClick={handleInstall}
+            className="bg-[#A1E636] border-2 border-black rounded-xl p-2 shadow-[2px_2px_0px_#000] active:translate-y-[2px] active:translate-x-[2px] active:shadow-none transition-all flex flex-col items-center justify-center animate-bounce"
+            title="Baixar App"
+          >
+            <Download size={20} strokeWidth={3} />
+          </button>
+        )}
       </div>
 
       {activeTab === 'home' && (
