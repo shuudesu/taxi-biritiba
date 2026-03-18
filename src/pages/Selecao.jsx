@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Car, User, Navigation, Download } from 'lucide-react';
+import { Car, User, Download } from 'lucide-react';
 import { usePwa } from '../PwaContext'; 
 
 export default function Selecao() {
@@ -33,8 +33,8 @@ export default function Selecao() {
         </div>
       )}
 
-      <div className="bg-[#FFE600] border-4 border-black p-5 rounded-3xl shadow-[4px_4px_0px_#000] mb-8">
-        <Navigation size={56} strokeWidth={2.5} className="text-black" />
+      <div className="bg-[#FFE600] border-4 border-black rounded-2xl shadow-[4px_4px_0px_#000] mb-8 overflow-hidden w-28 h-28 flex-shrink-0 flex justify-center items-center">
+        <img src="/sua-logo-aqui.png" alt="Logo Táxi Biritiba" className="w-[110%] h-[110%] object-cover scale-110" />
       </div>
       
       <h1 className="text-3xl font-black uppercase tracking-tight mb-2 text-center">Ponto Virtual</h1>
