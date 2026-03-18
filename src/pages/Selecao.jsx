@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Car, User, Navigation, Download } from 'lucide-react';
 import { usePwa } from '../PwaContext'; 
@@ -5,6 +6,11 @@ import { usePwa } from '../PwaContext';
 export default function Selecao() {
   const navigate = useNavigate();
   const { deferredPrompt, showPopup, popupDismissed, handleInstall, dismissPopup } = usePwa();
+
+  useEffect(() => {
+    if (localStorage.getItem('driver_id')) navigate('/motorista');
+    else if (localStorage.getItem('cliente_telefone')) navigate('/cliente');
+  }, [navigate]);
 
   return (
     <div className="flex flex-col items-center justify-center h-full flex-1 py-10 relative">

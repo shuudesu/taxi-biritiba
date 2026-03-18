@@ -1,10 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Car, Lock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export default function LoginMotorista() {
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (localStorage.getItem('driver_id')) {
+      navigate('/motorista');
+    }
+  }, [navigate]);
+
   const [telefone, setTelefone] = useState('');
   const [pin, setPin] = useState('');
   const [loading, setLoading] = useState(false);
@@ -46,8 +53,8 @@ export default function LoginMotorista() {
 
         <div className="mb-6 shrink-0">
           <label className="font-black uppercase text-xs mb-1 block">Seu WhatsApp</label>
-          <input 
-            type="number" 
+          <input
+            type="number"
             value={telefone}
             onChange={(e) => setTelefone(e.target.value)}
             placeholder="5511999999999"
@@ -58,8 +65,8 @@ export default function LoginMotorista() {
         <div className="mb-4 shrink-0">
           <label className="font-black uppercase text-xs mb-1 block">Seu PIN de Acesso</label>
           <div className="relative">
-            <input 
-              type="password" 
+            <input
+              type="password"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
               placeholder="••••"
@@ -69,7 +76,7 @@ export default function LoginMotorista() {
           </div>
         </div>
 
-        <button 
+        <button
           onClick={handleLogin}
           disabled={loading}
           className="w-full mt-8 mb-6 bg-[#FFE600] border-4 border-black rounded-2xl py-5 font-black text-xl flex justify-center items-center gap-3 shadow-[4px_4px_0px_#000] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all disabled:opacity-50 shrink-0"
