@@ -4,6 +4,57 @@ import { Power, Car, LogOut, Check, X, MapPin, Flag, Home, DollarSign, User, Sen
 import { supabase } from '../lib/supabase';
 import { usePwa } from '../PwaContext';
 
+// Variável global para manter o AudioContext destravado
+let globalAudioCtx = null;
+
+function initAudioCtx() {
+  try {
+    if (!globalAudioCtx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      globalAudioCtx = new AudioContext();
+    }
+    if (globalAudioCtx.state === 'suspended') {
+      globalAudioCtx.resume();
+    }
+  } catch(e) { }
+}
+
+// Destrava o áudio no primeiro clique do usuário em qualquer lugar da tela
+if (typeof window !== 'undefined') {
+  window.addEventListener('click', initAudioCtx, { once: true });
+  window.addEventListener('touchstart', initAudioCtx, { once: true });
+}
+
+// Função para avisar sobre nova corrida (Fala + Bipe)
+function playBeep() {
+  try {
+    initAudioCtx();
+    
+    // Fala nativa do sistema (funciona em quase 100% dos navegadores)
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel(); // Para fala anterior se houver
+      const msg = new SpeechSynthesisUtterance("Nova chamada de táxi!");
+      msg.lang = 'pt-BR';
+      msg.rate = 1.0;
+      window.speechSynthesis.speak(msg);
+    }
+    
+    if (globalAudioCtx) {
+      const oscillator = globalAudioCtx.createOscillator();
+      const gainNode = globalAudioCtx.createGain();
+      oscillator.type = 'square';
+      oscillator.frequency.setValueAtTime(600, globalAudioCtx.currentTime); 
+      gainNode.gain.setValueAtTime(0.5, globalAudioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, globalAudioCtx.currentTime + 1.2);
+      oscillator.connect(gainNode);
+      gainNode.connect(globalAudioCtx.destination);
+      oscillator.start();
+      oscillator.stop(globalAudioCtx.currentTime + 1.2);
+    }
+  } catch(e) { console.error('Audio beep failed', e); }
+}
+
 export default function Motorista() {
   const navigate = useNavigate();
   const { deferredPrompt, handleInstall } = usePwa();
@@ -25,6 +76,23 @@ export default function Motorista() {
   const [mensagens, setMensagens] = useState([]);
   const [novaMsg, setNovaMsg] = useState('');
   const chatEndRef = useRef(null);
+
+  // LOOP DE ALERTA SONORO DA CORRIDA
+  useEffect(() => {
+    let interval;
+    if (driverState === 'tocando') {
+      playBeep(); // Exibe alerta instantâneo
+      // Continua apitando/falando a cada 4 segundos até ele aceitar ou recusar
+      interval = setInterval(() => {
+        playBeep();
+      }, 4000); 
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval);
+      if (window.speechSynthesis) window.speechSynthesis.cancel(); // Para de falar se saiu do status
+    };
+  }, [driverState]);
 
   function setMotoristaSafe(data) {
     setMotorista(data);
